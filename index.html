@@ -3536,7 +3536,7 @@ function drawNetLobby() {
   ctx.font = "bold " + Math.round(H * 0.038) + "px 'Arial Black', Impact, sans-serif";
   ctx.fillText(map.name, W/2, ty - H * 0.035);
   ctx.restore();
-  drawBoardThumb(map, tx, ty, tw, th, true);
+  drawBoardThumb(map, tx, ty, tw, th, true, true);   // forceUnlocked — every arena is playable online
   if (host) {
     const asz = H * 0.085;
     arrowButton("‹", tx - asz - H * 0.02, ty + th/2, asz, () => netLobbyCycleArena(-1));
@@ -3716,7 +3716,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.14", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.15", W - 16, H - 16);
   ctx.restore();
 }
 
@@ -3929,7 +3929,7 @@ function tri(v, range) {
 
 // A live mini-render of a board, used as the carousel preview "image".
 // `animated` plays the rally; otherwise it freezes on a fixed mid-rally frame.
-function drawBoardThumb(map, x, y, w, h, animated) {
+function drawBoardThumb(map, x, y, w, h, animated, forceUnlocked) {
   ctx.save();
   roundRectPath(x, y, w, h, 10);
   ctx.clip();
@@ -4024,8 +4024,9 @@ function drawBoardThumb(map, x, y, w, h, animated) {
     ctx.fillText("?", x + w/2, y + h/2);
   }
 
-  // Locked overlay (a real board you haven't unlocked yet) — dim + a padlock
-  if (map.available !== false && !boardUnlocked(map)) {
+  // Locked overlay (a real board you haven't unlocked yet) — dim + a padlock.
+  // Skipped when forceUnlocked (online lobby: any arena is playable regardless of unlocks).
+  if (map.available !== false && !boardUnlocked(map) && !forceUnlocked) {
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(x, y, w, h);
     const lw = w * 0.12, lh = w * 0.1, lx = x + w/2 - lw/2, ly = y + h/2;
@@ -4038,7 +4039,7 @@ function drawBoardThumb(map, x, y, w, h, animated) {
 
   ctx.save();
   ctx.lineWidth = 2;
-  const unlockedFrame = map.available !== false && boardUnlocked(map);
+  const unlockedFrame = forceUnlocked || (map.available !== false && boardUnlocked(map));
   ctx.strokeStyle = unlockedFrame ? "rgba(90,200,230,0.75)" : "rgba(120,120,130,0.5)";
   roundRectPath(x, y, w, h, 10);
   ctx.stroke();
