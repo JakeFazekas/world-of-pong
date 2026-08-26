@@ -961,7 +961,7 @@ function startCountdown(dir) {
   combo = 0; comboBank = 0;          // reset the combo chain + banked bonus
   player.lastY = null; cpu.lastY = null;   // reset flick velocity tracking
   resetPowerups();                   // no leftover powerup / grow from a prior match
-  if (netPlay) { powerup = null; if (netObstacles) initObstacles(); else activeObstacles = []; }   // online: obstacles optional, no boss
+  if (netPlay) { powerup = null; if (netObstacles) initNetObstacles(); else activeObstacles = []; }   // online: obstacles optional (any arena), no boss
   else { initObstacles(); initBoss(); }   // fresh ice pillars + arm any boss attack
   // Loadout: CONSUME one of your chosen powerup and start the match with it active.
   startPowerup = null;
@@ -1204,6 +1204,7 @@ function netOnMessage(data) {
     else if (m.t === "i") net.remote = { y: m.y, tilt: m.tilt };
     else if (m.t === "ready") { if (net.lobby) { net.lobby.guestReady = !!m.r; netSendLobby(); netLobbyMaybeStart(); } }
     else if (m.t === "rematch") { if (state === "over") netEnterLobby(); }   // guest wants to play again → back to lobby
+    else if (m.t === "tolobby") netEnterLobby();                             // guest bailed the match → both back to lobby
     else if (m.t === "bye") netOnDrop();
   }
 }
@@ -1255,11 +1256,18 @@ function netTick() {
   }
 }
 
-// Leave a session (button / disconnect / match over) and go home.
+// Leave the SESSION entirely (disconnect) and go home.
 function netQuit() {
   netSend({ t: "bye" });
   netReset();
   homeIndex = 0; state = "home";
+}
+// Bail out of the current match but STAY connected — both players return to the lobby.
+function netToLobby() {
+  if (!net) { homeIndex = 0; state = "home"; return; }
+  netPaused = false;
+  if (net.role === "host") netEnterLobby();
+  else { netSend({ t: "tolobby" }); netPlay = false; state = "netlobby"; }   // host echoes a fresh 'lobby'
 }
 
 // ---- QUICK CONNECT (PeerJS public broker): one short code / clickable link, no
@@ -2081,6 +2089,18 @@ let activeObstacles = [];   // the LIVE obstacles for the current match (mutated
 function initObstacles() {
   const gen = MAPS[selectedMap] && MAPS[selectedMap].obstacles;
   activeObstacles = gen ? gen() : [];
+}
+// Online, obstacles can be enabled on ANY arena — including boss arenas, which have
+// no obstacle generator of their own. Those get a themed default pair of movers.
+function netDefaultObstacles() {
+  const m = MAPS[selectedMap];
+  const mat = m && m.id === "storm" ? "storm" : (m && m.id === "sun" ? "sun" : "rock");
+  return [ mover(W * 0.42, H * 0.40, 16, H * 0.15,  0.25, mat, "y", H * 0.15, 0.020, 0),
+           mover(W * 0.58, H * 0.60, 16, H * 0.15, -0.25, mat, "y", H * 0.15, 0.020, Math.PI) ];
+}
+function initNetObstacles() {
+  const gen = MAPS[selectedMap] && MAPS[selectedMap].obstacles;
+  activeObstacles = gen ? gen() : netDefaultObstacles();
 }
 function currentObstacles() { return activeObstacles; }
 // Drive the moving obstacles each frame (oscillate about their base position).
@@ -3581,9 +3601,9 @@ function drawNetPause() {
   ctx.font = Math.round(H * 0.03) + "px 'Courier New', monospace";
   ctx.fillText("the match is still live — your paddle is holding", W / 2, H * 0.44);
   ctx.restore();
-  const bw = 190, bh = H * 0.1, gap = 16, by = H * 0.56;
-  btnUI("▶ RESUME", W/2 - bw - gap/2, by, bw, bh, false, () => { netPaused = false; }, ui);
-  btnUI("✕ QUIT",   W/2 + gap/2,      by, bw, bh, false, () => netQuit(), ui);
+  const bw = 200, bh = H * 0.1, gap = 16, by = H * 0.56;
+  btnUI("▶ RESUME",   W/2 - bw - gap/2, by, bw, bh, false, () => { netPaused = false; }, ui);
+  btnUI("↩ TO LOBBY", W/2 + gap/2,      by, bw, bh, false, () => netToLobby(), ui);
 }
 
 // --- PROFILE screen: pick a username + an avatar (your multiplayer identity) ---
@@ -3653,6 +3673,48 @@ function drawProfile() {
   neonButton("‹ BACK", W * 0.03, H * 0.04, 120, H * 0.07, false, () => { homeIndex = 0; state = "home"; });
 }
 
+// Home profile card: LEVEL + XP bar, with the avatar + username nested inside below
+// it, all in one box. The whole card is the clickable target for the Profile screen.
+function drawHomeProfileCard(cx) {
+  const xp = save.xp || 0; let L = 1; while (xpForLevel(L + 1) <= xp) L++;
+  const base = xpForLevel(L), next = xpForLevel(L + 1);
+  const prog = next > base ? (xp - base) / (next - base) : 1;
+  const cw = Math.min(184, W * 0.26), ch = H * 0.185, x = cx - cw/2, y = H * 0.028;
+  const hov = mouseX >= x && mouseX <= x + cw && mouseY >= y && mouseY <= y + ch;
+  ctx.save();
+  roundRectPath(x, y, cw, ch, 12);
+  ctx.fillStyle = "rgba(10,26,36,0.62)"; ctx.fill();
+  ctx.lineWidth = hov ? 2.5 : 1.5; ctx.strokeStyle = hov ? "#7cf3ff" : "rgba(80,190,220,0.6)";
+  if (hov) { ctx.shadowColor = CY; ctx.shadowBlur = 14; }
+  roundRectPath(x, y, cw, ch, 12); ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // Level
+  ctx.fillStyle = "#eafcff"; ctx.shadowColor = CY; ctx.shadowBlur = 8;
+  ctx.font = "bold " + Math.round(H * 0.03) + "px " + UI_DISPLAY;
+  ctx.fillText("LVL " + L, cx, y + ch * 0.19);
+  ctx.shadowBlur = 0;
+  // XP bar
+  const bw = cw - 42, bx = cx - bw/2, by = y + ch * 0.36;
+  roundRectPath(bx, by, bw, 5, 2.5); ctx.fillStyle = "rgba(80,190,220,0.25)"; ctx.fill();
+  roundRectPath(bx, by, bw * Math.max(0, Math.min(1, prog)), 5, 2.5); ctx.fillStyle = CY; ctx.fill();
+  // subtle divider
+  ctx.strokeStyle = "rgba(90,150,180,0.25)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x + 14, y + ch * 0.52); ctx.lineTo(x + cw - 14, y + ch * 0.52); ctx.stroke();
+  // Avatar + username, centered as a unit under the bar
+  const nm = netMyName();
+  ctx.font = "bold " + Math.round(H * 0.03) + "px " + UI_FONT;
+  const nmW = ctx.measureText(nm).width, emW = H * 0.05, gap2 = 8, totalW = emW + gap2 + nmW;
+  const sx = cx - totalW/2, ry = y + ch * 0.76;
+  ctx.textAlign = "left";
+  ctx.font = Math.round(H * 0.042) + "px " + UI_FONT;
+  ctx.fillText(netMyIcon(), sx, ry);
+  ctx.fillStyle = "rgba(222,242,250,0.95)";
+  ctx.font = "bold " + Math.round(H * 0.03) + "px " + UI_FONT;
+  ctx.fillText(nm, sx + emW + gap2, ry);
+  ctx.restore();
+  hotspots.push({ x, y, w: cw, h: ch, action: () => { profileSel = 0; state = "profile"; } });
+}
+
 // Home hub — a full scene with a neon logo and buttons down the left
 function drawHome() {
   // Logo
@@ -3668,27 +3730,8 @@ function drawHome() {
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  drawCoinBalance(W - 155, H * 0.06);  // coin balance (it spins) — on the left, with room
-  drawLevelChip(W - 72, H * 0.06);     // level badge to the right of the coins
-
-  // Profile identity (avatar + username) just under the level badge — click it to
-  // customize (this is what your opponent sees online).
-  {
-    ctx.save();
-    ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    const py = H * 0.115, nm = netMyName();
-    ctx.fillStyle = "rgba(200,232,242,0.92)";
-    ctx.font = "bold " + Math.round(H * 0.026) + "px " + UI_FONT;
-    const nmW = ctx.measureText(nm).width;
-    ctx.fillText(nm, W - 16, py);
-    ctx.font = Math.round(H * 0.034) + "px " + UI_FONT;
-    ctx.fillText(netMyIcon(), W - 16 - nmW - 10, py);
-    ctx.restore();
-    const hx = W - 16 - nmW - 46, hy = H * 0.035, hw = (W - 8) - hx, hh = H * 0.11;   // covers the level badge + the profile row
-    const hov = mouseX >= hx && mouseX <= hx + hw && mouseY >= hy && mouseY <= hy + hh;
-    if (hov) { ctx.save(); ctx.strokeStyle = "rgba(124,243,255,0.45)"; ctx.lineWidth = 1; roundRectPath(hx, hy, hw, hh, 8); ctx.stroke(); ctx.restore(); }
-    hotspots.push({ x: hx, y: hy, w: hw, h: hh, action: () => { profileSel = 0; state = "profile"; } });
-  }
+  drawCoinBalance(W * 0.13, H * 0.06);   // coin balance — top-LEFT, clear of the profile card
+  drawHomeProfileCard(W - 96);           // level + xp + avatar + name in one clickable card, top-right
 
   // Centered button stack under the title (7 items — sized to fit)
   const bw = Math.min(300, W * 0.34), bh = H * 0.056, bx = W / 2 - bw / 2, gap = H * 0.011;
@@ -3716,7 +3759,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.15", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.16", W - 16, H - 16);
   ctx.restore();
 }
 
