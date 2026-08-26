@@ -554,17 +554,38 @@ function matchXp(won, pPts, cPts) { return (pPts + cPts) * 8 + (won ? 60 : 20); 
 
 // Paddle skins. fill/glow of "theme" means "use the current board's colour".
 const PADDLES = [
-  { id: "classic", name: "CLASSIC", fill: "theme",   glow: "theme",                 cost: 0    },
-  { id: "ivory",   name: "RED",     fill: "#ff2a2a", glow: "rgba(255,40,40,0.85)",  cost: 200  },
-  { id: "emerald", name: "EMERALD", fill: "#2fe089", glow: "rgba(40,240,140,0.85)", cost: 400,  reqLevel: 2 },
-  { id: "gold",    name: "GOLD",    fill: "#ffcf40", glow: "rgba(255,190,40,0.9)",  cost: 700,  reqLevel: 4 },
-  { id: "plasma",  name: "PLASMA",  fill: "#ff3df0", glow: "rgba(255,60,240,0.9)",  cost: 1200, reqLevel: 6 },
-  { id: "banana",  name: "BANANA",  fill: "theme",   glow: "theme",                 cost: 1500, reqLevel: 8, img: "banana" },
-  { id: "baguette",  name: "BAGUETTE",  fill: "theme", glow: "theme", cost: 1800, reqLevel: 9,  img: "baguette" },
-  { id: "hotdog",    name: "HOT DOG",   fill: "theme", glow: "theme", cost: 2200, reqLevel: 10, img: "hotdog" },
-  { id: "corn",      name: "CORN",      fill: "theme", glow: "theme", cost: 2600, reqLevel: 11, img: "corn" },
-  { id: "chocolate", name: "CHOCOLATE", fill: "theme", glow: "theme", cost: 3000, reqLevel: 12, img: "chocolate" },
+  { id: "classic", name: "CLASSIC", fill: "theme",   glow: "theme",                 cost: 0,    set: "classic" },
+  { id: "ivory",   name: "RED",     fill: "#ff2a2a", glow: "rgba(255,40,40,0.85)",  cost: 200,  set: "classic" },
+  { id: "emerald", name: "EMERALD", fill: "#2fe089", glow: "rgba(40,240,140,0.85)", cost: 400,  set: "classic", reqLevel: 2 },
+  { id: "gold",    name: "GOLD",    fill: "#ffcf40", glow: "rgba(255,190,40,0.9)",  cost: 700,  set: "classic", reqLevel: 4 },
+  { id: "plasma",  name: "PLASMA",  fill: "#ff3df0", glow: "rgba(255,60,240,0.9)",  cost: 1200, set: "classic", reqLevel: 6 },
+  { id: "banana",  name: "BANANA",  fill: "theme",   glow: "theme",                 cost: 1500, set: "food", img: "banana" },
+  { id: "baguette",  name: "BAGUETTE",  fill: "theme", glow: "theme", cost: 1800, set: "food", img: "baguette" },
+  { id: "hotdog",    name: "HOT DOG",   fill: "theme", glow: "theme", cost: 2200, set: "food", img: "hotdog" },
+  { id: "corn",      name: "CORN",      fill: "theme", glow: "theme", cost: 2600, set: "food", img: "corn" },
+  { id: "chocolate", name: "CHOCOLATE", fill: "theme", glow: "theme", cost: 3000, set: "food", img: "chocolate" },
 ];
+
+// --- PADDLE SETS (collections) ---
+// Paddles are grouped into themed SETS so the store stays browsable as the roster
+// grows: the PADDLES tab lists SET CARDS first, and you drill into one to see its
+// items. Sets gate in PARALLEL — each carries its own reqLevel and price band —
+// rather than as one ever-climbing ladder, so adding set #6 never needs a higher
+// tier than set #5. Own every paddle in a set and it pays a completion bonus,
+// which gives the collection an actual goal instead of being a list.
+// A set with no items yet renders as a dimmed COMING SOON teaser.
+const PADDLE_SETS = [
+  { id: "classic",   name: "CLASSIC",   icon: "🎮", tint: "#dfe6ee", blurb: "Where everyone starts",  reqLevel: 1,  bonus: 200  },
+  { id: "food",      name: "FOOD",      icon: "🍔", tint: "#ffcf40", blurb: "Snack-powered smashing", reqLevel: 8,  bonus: 600  },
+  { id: "epic",      name: "EPIC",      icon: "⚔️", tint: "#ff3df0", blurb: "Legendary weapons",      reqLevel: 10, bonus: 900  },
+  { id: "neon",      name: "NEON",      icon: "💡", tint: "#7cf3ff", blurb: "Pure glow",              reqLevel: 12, bonus: 900  },
+  { id: "elemental", name: "ELEMENTAL", icon: "❄️", tint: "#5ad1ff", blurb: "Forces of nature",       reqLevel: 14, bonus: 1200 },
+];
+function paddleSet(sid) { return PADDLE_SETS.find(s => s.id === sid) || PADDLE_SETS[0]; }
+function paddleSetOf(p) { return paddleSet(p.set || "classic"); }
+function paddleSetItems(sid) { return PADDLES.filter(p => (p.set || "classic") === sid); }
+// Sets with at least one paddle in them — the only ones that count toward "sets completed".
+function liveSets() { return PADDLE_SETS.filter(s => paddleSetItems(s.id).length > 0); }
 
 // Lifetime stats — a fresh, all-zero block. Older saves that predate this are
 // upgraded in loadSave() (any missing field just defaults to 0).
@@ -593,7 +614,18 @@ function loadSave() {
   if (save.loadout === undefined) save.loadout = null;
   save.profile = Object.assign({ name: "", icon: "🐱" }, save.profile || {});   // multiplayer identity
   save.avatars = save.avatars || [];
+  seedSetsDone();      // paddle SETS arrived after some saves already completed one
   reconcileStats();   // one-time: back-fill from legacy data so old saves aren't inconsistent
+}
+
+// Set-completion bonuses arrived after paddles did, so a save can already own a
+// full set. Mark those CLAIMED without paying out — the paddles were bought under
+// the old rules, and retro-injecting coins would distort the economy. New sets
+// (and any set you finish from here) pay normally.
+function seedSetsDone() {
+  if (save.setsDone) return;
+  save.setsDone = PADDLE_SETS.filter(s => paddleSetCompleteReal(s.id)).map(s => s.id);
+  persist();
 }
 
 // Stats tracking was added after some saves already had history (coins, wins,
@@ -615,7 +647,7 @@ function reconcileStats() {
   persist();
 }
 function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
-function resetSave() { save = { coins: 0, wins: 0, xp: 0, paddle: "classic", boards: ["ring"], paddles: ["classic"], beaten: [], seenArenas: [], stats: freshStats(), inventory: {}, loadout: null, profile: { name: "", icon: "🐱" }, avatars: [] }; persist(); }
+function resetSave() { save = { coins: 0, wins: 0, xp: 0, paddle: "classic", boards: ["ring"], paddles: ["classic"], beaten: [], seenArenas: [], stats: freshStats(), inventory: {}, loadout: null, profile: { name: "", icon: "🐱" }, avatars: [], setsDone: [] }; persist(); }
 
 // --- PROFILE (multiplayer identity): a username + an avatar icon. Some avatars are
 // free / level-unlocked, a few premium ones cost coins. Shown on the home hub and to
@@ -645,7 +677,33 @@ function arenaUnlockable(m) { return boardLevelMet(m) && arenaPrereqMet(m); }
 function arenaIsNew(m) { return m.available !== false && !boardUnlocked(m) && arenaUnlockable(m) && !(save.seenArenas || []).includes(m.id); }
 function markArenaSeen(id) { save.seenArenas = save.seenArenas || []; if (!save.seenArenas.includes(id)) { save.seenArenas.push(id); persist(); } }
 function paddleUnlocked(p) { return devUnlockAll || p.cost === 0 || save.paddles.includes(p.id); }
-function paddleLevelMet(p) { return devUnlockAll || playerLevel() >= (p.reqLevel || 1); }
+// True ownership, ignoring the DEV unlock-all flag — used by the set-completion
+// payout so dev mode can't mint bonus coins.
+function paddleOwnedReal(p) { return p.cost === 0 || (save.paddles || []).includes(p.id); }
+// A paddle needs BOTH its own level (if it has one) and its set's floor. New sets
+// only set the SET's reqLevel; the per-item ones on the classic run still apply.
+function paddleReqLevel(p) { return Math.max(p.reqLevel || 1, paddleSetOf(p).reqLevel || 1); }
+function paddleLevelMet(p) { return devUnlockAll || playerLevel() >= paddleReqLevel(p); }
+function setLevelMet(s) { return devUnlockAll || playerLevel() >= (s.reqLevel || 1); }
+// Owned count for the progress bar — dev-aware so it matches what the cells show.
+function paddleSetOwned(sid) { return paddleSetItems(sid).filter(paddleUnlocked).length; }
+// Payout gate: really own every item, and the set must actually have items.
+function paddleSetCompleteReal(sid) {
+  const items = paddleSetItems(sid);
+  return items.length > 0 && items.every(paddleOwnedReal);
+}
+function setClaimed(sid) { return (save.setsDone || []).includes(sid); }
+// Pay the completion bonus the first time a set is finished. Returns the set (for
+// the celebration) or null.
+function claimSetBonus(sid) {
+  save.setsDone = save.setsDone || [];
+  if (!paddleSetCompleteReal(sid) || setClaimed(sid)) return null;
+  const s = paddleSet(sid);
+  save.setsDone.push(sid);
+  save.coins += s.bonus; save.stats.goldEarned += s.bonus;
+  persist();
+  return s;
+}
 
 // --- DEV tools (master build only) ---
 function ownEverything() {
@@ -655,6 +713,7 @@ function ownEverything() {
 }
 function relockAll() {   // reset ownership to starters, but keep coins & wins
   save.boards = ["ring"]; save.paddles = ["classic"];
+  save.setsDone = [];    // so set-completion bonuses can be re-tested
   if (!save.paddles.includes(save.paddle)) save.paddle = "classic";
   if (!boardUnlocked(MAPS[selectedMap])) selectedMap = 0;
   persist();
@@ -664,8 +723,10 @@ function coins() { return save.coins; }
 // --- Purchase celebration ("unlockfx" screen) ---
 let unlockFx = null;   // { kind, name, cost, next, start }
 let fxCoins = [];
-function startUnlockFx(kind, name, cost, next) {
-  unlockFx = { kind, name, cost, next, start: frame };
+// opts: { head } overrides the "UNLOCKED!" headline, { gain } shows coins flowing
+// IN (green +N) instead of the purchase price flowing out — used by set bonuses.
+function startUnlockFx(kind, name, cost, next, opts) {
+  unlockFx = Object.assign({ kind, name, cost, next, start: frame }, opts || {});
   fxCoins = [];
   for (let i = 0; i < 28; i++) {
     const a = Math.random() * Math.PI * 2, sp = 3 + Math.random() * 6;
@@ -1356,8 +1417,8 @@ function netPasteThen(cb) {
 function activateHome() {
   if (homeIndex === 0)      { mapIndex = 0; mapScroll = 0; state = "mapselect"; }   // Start — snap to arena 1 (no leftover-scroll slide)
   else if (homeIndex === 1) { netMenuIndex = 0; netReset(); state = "netmenu"; }   // Play a Friend (online)
-  else if (homeIndex === 2) { storeTab = "powerups"; shopSel = 0; storeScroll = 0; state = "store"; }   // Store
-  else if (homeIndex === 3) { state = "locker"; }                        // Locker
+  else if (homeIndex === 2) { storeTab = "powerups"; storeSet = null; shopSel = 0; storeScroll = 0; state = "store"; }   // Store
+  else if (homeIndex === 3) { storeScroll = 0; state = "locker"; }       // Locker (shares the store's scroll state)
   else if (homeIndex === 4) { state = "stats"; }                          // Stats
   else if (homeIndex === 5) { settingsReturn = "home"; settingsIndex = 0; state = "settings"; }
   else                      { state = "quit"; }                          // Quit
@@ -1427,18 +1488,29 @@ document.addEventListener("keydown", e => {
 
   // Store — ← / → switch tabs, ↑ / ↓ move within the tab, Enter buys, Esc back
   if (state === "store") {
-    const items = storeTab === "powerups" ? SHOP_ITEMS : PADDLES;
-    if (e.key === "ArrowLeft")  { storeTab = "powerups"; shopSel = 0; storeScroll = 0; }
-    if (e.key === "ArrowRight") { storeTab = "paddles";  shopSel = 0; storeScroll = 0; }
+    const onSets = storeTab === "paddles" && !storeSet;
+    const items = storeTab === "powerups" ? SHOP_ITEMS : (onSets ? PADDLE_SETS : paddleSetItems(storeSet));
+    if (e.key === "ArrowLeft")  { storeTab = "powerups"; storeSet = null; shopSel = 0; storeScroll = 0; }
+    if (e.key === "ArrowRight") { storeTab = "paddles";  storeSet = null; shopSel = 0; storeScroll = 0; }
     if (e.key === "ArrowUp")    shopSel = (shopSel - 1 + items.length) % items.length;
     if (e.key === "ArrowDown")  shopSel = (shopSel + 1) % items.length;
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") storeScroll = Math.max(0, Math.min(storeScrollMax, Math.floor(shopSel / 2) * 86 - 90));   // keep the selection in view
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (storeTab === "powerups") buyPowerup(SHOP_ITEMS[shopSel].key); else buyPaddleShop(PADDLES[shopSel].id); }
-    if (e.key === "Escape") { homeIndex = 2; state = "home"; }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") storeScroll = Math.max(0, Math.min(storeScrollMax, Math.floor(shopSel / 2) * storeRowH - 90));   // keep the selection in view
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (storeTab === "powerups") buyPowerup(SHOP_ITEMS[shopSel].key);
+      else if (onSets) { const s = PADDLE_SETS[shopSel]; if (paddleSetItems(s.id).length) { storeSet = s.id; shopSel = 0; storeScroll = 0; uiClick(); } }
+      else buyPaddleShop(items[shopSel].id);
+    }
+    // Esc backs out one level at a time: inside a set → the shelves → the hub.
+    if (e.key === "Escape") {
+      if (storeSet) { storeSet = null; shopSel = 0; storeScroll = 0; }
+      else { homeIndex = 2; state = "home"; }
+    }
     return;
   }
-  // Locker — read-only-ish (equip by click); any exit key returns to the hub
+  // Locker — equip by click; ← / → cycle the set filter, exit keys return to the hub
   if (state === "locker") {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { cycleLockerSet(e.key === "ArrowRight" ? 1 : -1); return; }
     if (e.key === "Escape" || e.key === "Enter" || e.key === " ") { e.preventDefault(); homeIndex = 3; state = "home"; }
     return;
   }
@@ -1651,13 +1723,16 @@ function canvasPos(e) {
   };
 }
 
+// Screens whose content scrolls — the store grid and the locker case share one
+// set of scroll vars (only one of them is ever on screen at a time).
+function isScrollScreen() { return state === "store" || state === "locker"; }
 // Drag the store scrollbar thumb to scroll (grab it, or click the track to jump there).
 function storeBarScrollTo(centerY) {
   if (!storeBar || storeBar.thumbTotal <= 0) return;
   storeScroll = Math.max(0, Math.min(storeScrollMax, (centerY - storeBar.thumbH / 2 - storeBar.y) / storeBar.thumbTotal * storeScrollMax));
 }
 canvas.addEventListener("mousedown", e => {
-  if (state !== "store" || !storeBar) return;
+  if (!isScrollScreen() || !storeBar) return;
   const p = canvasPos(e);
   if (p.x >= storeBar.x - 6 && p.x <= storeBar.x + storeBar.w + 6 && p.y >= storeBar.y && p.y <= storeBar.y + storeBar.h) {
     if (p.y >= storeBar.thumbY && p.y <= storeBar.thumbY + storeBar.thumbH) storeDragOff = p.y - storeBar.thumbY;   // grabbed the thumb
@@ -1680,7 +1755,7 @@ canvas.addEventListener("mousemove", e => {
 });
 // Mouse wheel angles the paddle (pinball-style) for aimed shots — a skill layer.
 canvas.addEventListener("wheel", e => {
-  if (state === "store") { e.preventDefault(); storeScroll = Math.max(0, Math.min(storeScrollMax, storeScroll + Math.sign(e.deltaY) * 46)); return; }
+  if (isScrollScreen()) { e.preventDefault(); storeScroll = Math.max(0, Math.min(storeScrollMax, storeScroll + Math.sign(e.deltaY) * 46)); return; }
   if ((state === "playing" && !paused) || state === "countdown") {
     e.preventDefault();
     if (netPlay && net && net.role === "guest") net.tilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, net.tilt + Math.sign(e.deltaY) * 0.06));
@@ -1856,7 +1931,7 @@ function netGuestTouch() { return netPlay && net && net.role === "guest"; }
 canvas.addEventListener("touchstart", e => {
   initAudio();
   const p = touchPos(e);
-  if (state === "store") { touchScrollY = p.y; storeTapX = p.x; storeTapY = p.y; storeMoved = false; e.preventDefault(); return; }   // defer the tap until touchend (drag = scroll)
+  if (isScrollScreen()) { touchScrollY = p.y; storeTapX = p.x; storeTapY = p.y; storeMoved = false; e.preventDefault(); return; }   // defer the tap until touchend (drag = scroll)
   if (handleTap(p.x, p.y)) { e.preventDefault(); return; }   // tapped a button (e.g. pause)
   if (touchInPlay()) {
     if (netGuestTouch()) { net.padY = Math.max(0, Math.min(H - padH(cpu), p.y - padH(cpu)/2)); touchBaseX = p.x; touchBaseTilt = net.tilt; }
@@ -1865,7 +1940,7 @@ canvas.addEventListener("touchstart", e => {
   e.preventDefault();   // cancel the synthetic click so nothing double-fires
 }, { passive: false });
 canvas.addEventListener("touchmove", e => {
-  if (state === "store") {
+  if (isScrollScreen()) {
     const p = touchPos(e);
     if (touchScrollY != null) { const dy = p.y - touchScrollY; if (Math.abs(dy) > 3) storeMoved = true; storeScroll = Math.max(0, Math.min(storeScrollMax, storeScroll - dy)); touchScrollY = p.y; }
     e.preventDefault(); return;
@@ -1886,7 +1961,7 @@ canvas.addEventListener("touchmove", e => {
   e.preventDefault();
 }, { passive: false });
 canvas.addEventListener("touchend", e => {
-  if (state === "store" && storeTapX != null) { if (!storeMoved) handleTap(storeTapX, storeTapY); touchScrollY = null; storeTapX = null; }
+  if (isScrollScreen() && storeTapX != null) { if (!storeMoved) handleTap(storeTapX, storeTapY); touchScrollY = null; storeTapX = null; }
 }, { passive: false });
 
 function restart() {
@@ -3808,7 +3883,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.22", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.23", W - 16, H - 16);
   ctx.restore();
 }
 
@@ -4624,7 +4699,7 @@ function drawUnlockFx() {
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillStyle = "#ffd453"; ctx.shadowColor = "rgba(255,190,40,0.95)"; ctx.shadowBlur = 34;
   ctx.font = "bold " + Math.round(H * 0.12) + "px 'Arial Black', Impact, sans-serif";
-  ctx.fillText("UNLOCKED!", 0, 0);
+  ctx.fillText(unlockFx.head || "UNLOCKED!", 0, 0);
   ctx.restore();
 
   // Kind + item name
@@ -4633,7 +4708,7 @@ function drawUnlockFx() {
   ctx.globalAlpha = Math.min(1, Math.max(0, (t - 10) / 12));
   ctx.fillStyle = "rgba(150,210,230,0.85)";
   ctx.font = Math.round(H * 0.026) + "px 'Courier New', monospace";
-  ctx.fillText("NEW " + unlockFx.kind, W/2, H * 0.53);
+  ctx.fillText((unlockFx.gain ? "" : "NEW ") + unlockFx.kind, W/2, H * 0.53);
   ctx.fillStyle = "#eafcff"; ctx.shadowColor = CY; ctx.shadowBlur = 16;
   ctx.font = "bold " + Math.round(H * 0.055) + "px 'Arial Black', Impact, sans-serif";
   ctx.fillText(unlockFx.name, W/2, H * 0.6);
@@ -4644,10 +4719,11 @@ function drawUnlockFx() {
   ctx.textAlign = "left"; ctx.textBaseline = "middle";
   ctx.globalAlpha = Math.max(0, 1 - t / 120);
   ctx.font = "bold " + Math.round(H * 0.032) + "px 'Courier New', monospace";
-  const txt = "  -" + unlockFx.cost, tw = ctx.measureText(txt).width, r = H * 0.017;
+  const txt = unlockFx.gain ? ("  +" + unlockFx.gain) : ("  -" + unlockFx.cost);
+  const tw = ctx.measureText(txt).width, r = H * 0.017;
   const fy = H * 0.68 - Math.min(t, 70) * 0.5, sx = W/2 - (tw + r * 2) / 2;
   drawCoin(sx + r, fy, r);
-  ctx.fillStyle = "#ff9a6a";
+  ctx.fillStyle = unlockFx.gain ? "#7dffb0" : "#ff9a6a";
   ctx.fillText(txt, sx + r * 2, fy);
   ctx.restore();
 
@@ -4784,7 +4860,10 @@ const SHOP_ITEMS = [
   { key: "hustle",   emoji: "👟", desc: "Faster you, slow CPU",   cost: 250 },
 ];
 let shopSel = 0, storeTab = "powerups", buyFx = null;   // buyFx = { key, start } for the +1 pop
+let storeSet = null;   // PADDLES tab: null = browsing the set cards, else the set id you drilled into
+let lockerSet = null;  // LOCKER: null = ALL, else filter the case to one set
 let storeScroll = 0, storeScrollMax = 0, touchScrollY = null, storeTapX = null, storeTapY = 0, storeMoved = false;   // store list scroll + tap-vs-drag
+let storeRowH = 86;   // row pitch of whatever grid is on screen (cellH + gap) — set each draw
 let storeBar = null, storeDragging = false, storeDragOff = 0;   // draggable scrollbar geometry + drag state
 function invCount(key) { return save.inventory[key] || 0; }
 function buyPowerup(key) {   // consumable — adds ONE, buy as many as you like
@@ -4800,7 +4879,14 @@ function buyPowerup(key) {   // consumable — adds ONE, buy as many as you like
 function buyPaddleShop(pid) {   // paddles are permanent unlocks — full celebration
   const p = PADDLES.find(x => x.id === pid); if (!p || paddleUnlocked(p)) return;
   if (!paddleLevelMet(p) || save.coins < p.cost) { beep(160, 0.12, "sawtooth", 0.12); return; }
-  if (buyPaddle(p)) startUnlockFx("PADDLE", p.name, p.cost, () => { state = "store"; });
+  if (!buyPaddle(p)) return;
+  // Buying the last paddle in a set chains a second celebration for the bonus.
+  startUnlockFx("PADDLE", p.name, p.cost, () => {
+    const done = claimSetBonus(p.set || "classic");
+    if (done) startUnlockFx(done.icon + " " + done.name + " SET", "+" + done.bonus + " BONUS", 0,
+                            () => { state = "store"; }, { head: "SET COMPLETE!", gain: done.bonus });
+    else state = "store";
+  });
 }
 // Loadout = the consumable powerup taken into the next match (None + anything with count>0).
 function loadoutList() { return [null].concat(SHOP_ITEMS.map(s => s.key).filter(k => invCount(k) > 0)); }
@@ -4822,6 +4908,13 @@ function lobbyArrow(chev, ax, ay, aw, ah, action, ui) {
   ctx.restore();
   hotspots.push({ x: ax, y: ay, w: aw, h: ah, action });
 }
+// Owned/total bar shared by the store's set cards and the locker's set chips.
+function drawSetProgress(x, y, w, h, owned, total, tint) {
+  ctx.save();
+  roundRectPath(x, y, w, h, h / 2); ctx.fillStyle = "rgba(120,180,200,0.20)"; ctx.fill();
+  if (owned > 0 && total > 0) { roundRectPath(x, y, Math.max(h, w * (owned / total)), h, h / 2); ctx.fillStyle = tint; ctx.fill(); }
+  ctx.restore();
+}
 function drawStore() {
   const ui = UMBRELLA_UI;
   const pw = Math.min(660, W * 0.95), ph = Math.min(H * 0.96, 448);
@@ -4841,14 +4934,34 @@ function drawStore() {
     ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = on ? ui.btnTextOn : ui.btnText; ctx.font = "bold 14px " + ui.font;
     ctx.fillText(label, tx + tabW / 2, tabY + tabH / 2);
     ctx.restore();
-    hotspots.push({ x: tx, y: tabY, w: tabW, h: tabH, action: () => { storeTab = key; shopSel = 0; storeScroll = 0; } });
+    hotspots.push({ x: tx, y: tabY, w: tabW, h: tabH, action: () => { storeTab = key; storeSet = null; shopSel = 0; storeScroll = 0; } });
   });
-  const gy = tabY + tabH + 16, gridW = pw - 48, cols = 2, gapX = 16, gapY = 10;
-  const cellW = (gridW - gapX) / cols, cellH = 76, gx = W / 2 - gridW / 2;
-  const list = storeTab === "powerups" ? SHOP_ITEMS : PADDLES;
-  // Scrollable grid — the list (esp. paddles) can be taller than the panel.
+  // The PADDLES tab is two levels deep: the SET CARDS, then one set's paddles.
+  const isPow = storeTab === "powerups";
+  const inSets = !isPow && !storeSet;
+  const list = isPow ? SHOP_ITEMS : (inSets ? PADDLE_SETS : paddleSetItems(storeSet));
+  const gridW = pw - 48, cols = 2, gapX = 16, gapY = 10;
+  // 86 (not 92) so all five set cards fit the panel exactly — no 16px scroll stub.
+  const cellW = (gridW - gapX) / cols, cellH = inSets ? 86 : 76, gx = W / 2 - gridW / 2;
+  let gy = tabY + tabH + 16;
+  // Breadcrumb row while you're inside a set: back to the shelves + owned count.
+  if (!isPow && storeSet) {
+    const s = paddleSet(storeSet), own = paddleSetOwned(storeSet), tot = list.length;
+    const crumbW = 92, crumbH = 26;
+    btnUI("‹ SETS", gx, gy - 3, crumbW, crumbH, false, () => { storeSet = null; shopSel = 0; storeScroll = 0; }, ui);
+    ctx.save(); ctx.textBaseline = "middle";
+    ctx.textAlign = "left"; ctx.fillStyle = s.tint; ctx.font = "bold 15px " + ui.font;
+    ctx.fillText(s.icon + "  " + s.name, gx + crumbW + 14, gy + 10);
+    ctx.textAlign = "right"; ctx.font = "bold 13px " + ui.font;
+    ctx.fillStyle = own === tot ? "#ffd453" : ui.btnText;
+    ctx.fillText(own + " / " + tot + (own === tot ? "  ★" : ""), gx + gridW, gy + 10);
+    ctx.restore();
+    gy += crumbH + 8;
+  }
+  // Scrollable grid — the list can be taller than the panel.
   const srows = Math.ceil(list.length / cols);
   const viewTop = gy, viewBottom = p.py + ph - 58, viewH = viewBottom - viewTop;
+  storeRowH = cellH + gapY;   // so keyboard nav can scroll the selection into view
   const totalH = srows * (cellH + gapY) - gapY;
   storeScrollMax = Math.max(0, totalH - viewH);
   storeScroll = Math.max(0, Math.min(storeScroll, storeScrollMax));
@@ -4859,7 +4972,43 @@ function drawStore() {
     const x = gx + col * (cellW + gapX), y = gy + row * (cellH + gapY) - storeScroll;
     if (y + cellH < viewTop - 4 || y > viewBottom + 4) return;   // scrolled out of view
     const sel = shopSel === i;
-    const isPow = storeTab === "powerups";
+    // --- SET CARD: a shelf, not an item. Shows collection progress and drills in. ---
+    if (inSets) {
+      const s = it, items = paddleSetItems(s.id), tot = items.length;
+      const own = tot ? paddleSetOwned(s.id) : 0;
+      const empty = tot === 0, lvlok = setLevelMet(s), full = tot > 0 && own === tot;
+      const hov = (mouseX >= x && mouseX <= x + cellW && mouseY >= y && mouseY <= y + cellH) || (kbNav && sel);
+      const active = hov && !empty;
+      ctx.save();
+      if (empty) ctx.globalAlpha = 0.38; else if (!lvlok) ctx.globalAlpha = 0.72;
+      roundRectPath(x, y, cellW, cellH, 10);
+      ctx.fillStyle = full ? "rgba(40,140,90,0.18)" : (active ? ui.btnFillOn : ui.btnFill); ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = full ? "#ffd453" : (active ? s.tint : ui.btnBorder);
+      if (active) { ctx.shadowColor = s.tint; ctx.shadowBlur = 12; }
+      roundRectPath(x, y, cellW, cellH, 10); ctx.stroke(); ctx.shadowBlur = 0;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "30px " + UI_FONT;
+      ctx.fillText(s.icon, x + 34, y + cellH / 2);
+      ctx.textAlign = "left";
+      ctx.fillStyle = ui.btnTextOn; ctx.font = "bold 16px " + ui.font;
+      ctx.fillText(s.name, x + 64, y + 22);
+      ctx.fillStyle = ui.btnText; ctx.font = "11px " + ui.font;
+      ctx.fillText(s.blurb, x + 64, y + 39);
+      if (empty) {
+        ctx.fillStyle = ui.btnText; ctx.font = "bold 12px " + ui.font;
+        ctx.fillText("COMING SOON", x + 64, y + 64);
+      } else {
+        drawSetProgress(x + 64, y + 51, cellW - 80, 7, own, tot, full ? "#ffd453" : s.tint);
+        ctx.font = "bold 12px " + ui.font;
+        if (full)       { ctx.fillStyle = "#ffd453";              ctx.fillText("★ COMPLETE  ·  " + tot + " / " + tot, x + 64, y + 71); }
+        else if (!lvlok){ ctx.fillStyle = "rgba(205,215,225,0.9)"; ctx.fillText("🔒 REACH LVL " + (s.reqLevel || 1), x + 64, y + 71); }
+        else            { ctx.fillStyle = ui.btnText;              ctx.fillText(own + " / " + tot + " OWNED", x + 64, y + 71); }
+        ctx.textAlign = "right"; ctx.fillStyle = active ? s.tint : ui.btnBorderOn; ctx.font = "bold 16px " + ui.font;
+        ctx.fillText("›", x + cellW - 12, y + 71);
+      }
+      ctx.restore();
+      if (!empty) hotspots.push({ x, y, w: cellW, h: cellH, action: () => { storeSet = s.id; shopSel = 0; storeScroll = 0; uiClick(); } });
+      return;
+    }
     const owned = !isPow && paddleUnlocked(it);
     const afford = save.coins >= it.cost;
     const disabled = isPow ? !afford : (!owned && (!paddleLevelMet(it) || !afford));   // can't buy right now → greyed
@@ -4892,7 +5041,7 @@ function drawStore() {
       ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.fillStyle = ui.btnTextOn; ctx.font = "bold 15px " + ui.font; ctx.fillText(pd.name, x + 50, y + 30);
       ctx.textBaseline = "middle";
       if (owned) { ctx.fillStyle = "#7dffb0"; ctx.font = "bold 13px " + ui.font; ctx.fillText("✓ OWNED", x + 50, y + cellH - 18); }
-      else if (!lvlok) { ctx.fillStyle = "rgba(205,215,225,0.9)"; ctx.font = "12px " + ui.font; ctx.fillText("REACH LVL " + (pd.reqLevel || 1), x + 50, y + cellH - 18); }
+      else if (!lvlok) { ctx.fillStyle = "rgba(205,215,225,0.9)"; ctx.font = "12px " + ui.font; ctx.fillText("REACH LVL " + paddleReqLevel(pd), x + 50, y + cellH - 18); }
       else { drawCoin(x + 56, y + cellH - 18, 8); if (afford) drawGoldText(String(pd.cost), x + 70, y + cellH - 18, 14, "left"); else { ctx.fillStyle = "rgba(185,185,195,0.8)"; ctx.font = "bold 13px " + ui.font; ctx.fillText(String(pd.cost), x + 70, y + cellH - 18); } ctx.textAlign = "right"; ctx.fillStyle = ui.btnBorderOn; ctx.font = "bold 12px " + ui.font; ctx.fillText("BUY", x + cellW - 12, y + cellH - 18); }
     }
     ctx.restore();
@@ -4914,23 +5063,72 @@ function drawStore() {
   const backW = 180, backH = 44;
   btnUI("‹ BACK", W / 2 - backW / 2, p.py + ph - 50, backW, backH, false, () => { homeIndex = 2; state = "home"; }, ui);
 }
+// The locker's set filter: ALL, then every set you own at least one paddle from.
+function lockerSetList() { return [null].concat(PADDLE_SETS.filter(s => paddleSetOwned(s.id) > 0).map(s => s.id)); }
+function cycleLockerSet(dir) {
+  const l = lockerSetList();
+  let i = l.indexOf(lockerSet); if (i < 0) i = 0;
+  lockerSet = l[(i + dir + l.length) % l.length]; storeScroll = 0; uiClick();
+}
 // LOCKER — everything you OWN: equip a paddle, and see your powerup stock.
+// The paddle case is filtered by SET and scrolls, so it stays readable as the
+// roster grows past a couple of rows.
 function drawLocker() {
   const ui = UMBRELLA_UI;
-  const pw = Math.min(660, W * 0.95), ph = Math.min(H * 0.96, 420);
+  const pw = Math.min(660, W * 0.95), ph = Math.min(H * 0.96, 440);
   const p = panelUI(pw, ph, "LOCKER", ui);
   drawCoinBalance(W - 155, H * 0.06);
   drawLevelChip(W - 72, H * 0.06);
 
-  ctx.save(); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = ui.title; ctx.font = "bold 14px " + ui.font;
-  ctx.fillText("PADDLES  ·  tap to equip", p.px + 24, p.py + 66); ctx.restore();
-  const owned = PADDLES.filter(pd => paddleUnlocked(pd));
+  const innerW = pw - 48, innerX = p.px + 24;
+  ctx.save(); ctx.textBaseline = "middle";
+  ctx.textAlign = "left"; ctx.fillStyle = ui.title; ctx.font = "bold 14px " + ui.font;
+  ctx.fillText("PADDLES  ·  tap to equip", innerX, p.py + 62);
+  const totalOwned = PADDLES.filter(paddleUnlocked).length, doneSets = (save.setsDone || []).length;
+  ctx.textAlign = "right"; ctx.fillStyle = ui.btnText; ctx.font = "bold 12px " + ui.font;
+  ctx.fillText(totalOwned + " / " + PADDLES.length + (doneSets ? "   ★ " + doneSets : ""), innerX + innerW, p.py + 62);
+  ctx.restore();
+
+  // Set filter chips
+  const chipY = p.py + 78, chipH = 24;
+  let chipX = innerX;
+  lockerSetList().forEach(sid => {
+    const s = sid ? paddleSet(sid) : null;
+    const label = s ? (s.icon + " " + paddleSetOwned(sid) + "/" + paddleSetItems(sid).length + (setClaimed(sid) ? " ★" : ""))
+                    : ("ALL " + totalOwned);
+    ctx.save(); ctx.font = "bold 11px " + ui.font;
+    const cw = ctx.measureText(label).width + 20;
+    const on = lockerSet === sid;
+    const hov = mouseX >= chipX && mouseX <= chipX + cw && mouseY >= chipY && mouseY <= chipY + chipH;
+    roundRectPath(chipX, chipY, cw, chipH, chipH / 2);
+    ctx.fillStyle = on ? ui.btnFillOn : ui.btnFill; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = on ? (s ? s.tint : CY) : (hov ? ui.btnBorderOn : ui.btnBorder);
+    roundRectPath(chipX, chipY, cw, chipH, chipH / 2); ctx.stroke();
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = on ? ui.btnTextOn : ui.btnText;
+    ctx.fillText(label, chipX + cw / 2, chipY + chipH / 2 + 1);
+    ctx.restore();
+    hotspots.push({ x: chipX, y: chipY, w: cw, h: chipH, action: () => { lockerSet = sid; storeScroll = 0; uiClick(); } });
+    chipX += cw + 6;
+  });
+
+  const owned = PADDLES.filter(pd => paddleUnlocked(pd) && (!lockerSet || (pd.set || "classic") === lockerSet));
   // Grid so cells stay wide enough for the names (one cramped row shrank long names like CHOCOLATE).
-  const lgap = 10, lcols = Math.max(1, Math.min(owned.length, Math.floor((pw - 48 + lgap) / (92 + lgap))));
-  const sw = (pw - 48 - (lcols - 1) * lgap) / lcols, sh = 74, sy = p.py + 82;
+  const lgap = 10, lcols = Math.max(1, Math.floor((innerW + lgap) / (92 + lgap)));
+  const sw = (innerW - (lcols - 1) * lgap) / lcols, sh = 74, sy = p.py + 114;
+  // Clip + scroll the case so extra rows don't run into the powerup shelf below.
+  const lRows = Math.ceil(owned.length / lcols);
+  const caseH = sh * 2 + lgap;                       // two rows visible at a time
+  const caseTotal = lRows * (sh + lgap) - lgap;
+  storeScrollMax = Math.max(0, caseTotal - caseH);
+  storeScroll = Math.max(0, Math.min(storeScroll, storeScrollMax));
+  storeRowH = sh + lgap;
+  ctx.save();
+  roundRectPath(innerX - 6, sy - 5, innerW + 12, caseH + 10, 10); ctx.clip();
   owned.forEach((pd, i) => {
     const col = i % lcols, row = (i - col) / lcols;
-    const x = p.px + 24 + col * (sw + lgap), y = sy + row * (sh + lgap), equipped = save.paddle === pd.id;
+    const x = innerX + col * (sw + lgap), y = sy + row * (sh + lgap) - storeScroll, equipped = save.paddle === pd.id;
+    if (y + sh < sy - 6 || y > sy + caseH + 6) return;   // scrolled out of view
     const active = mouseX >= x && mouseX <= x + sw && mouseY >= y && mouseY <= y + sh;
     ctx.save();
     roundRectPath(x, y, sw, sh, 8);
@@ -4938,6 +5136,9 @@ function drawLocker() {
     ctx.lineWidth = 2; ctx.strokeStyle = equipped ? CY : (active ? ui.btnBorderOn : ui.btnBorder);
     if (active || equipped) { ctx.shadowColor = ui.glow; ctx.shadowBlur = 10; }
     roundRectPath(x, y, sw, sh, 8); ctx.stroke(); ctx.shadowBlur = 0;
+    // Set tint pip — groups the case visually when the ALL filter is on.
+    ctx.fillStyle = paddleSetOf(pd).tint; ctx.globalAlpha = 0.75;
+    roundRectPath(x + 6, y + 6, 3, sh - 12, 1.5); ctx.fill(); ctx.globalAlpha = 1;
     const swatch = pd.fill === "theme" ? "#dfe6ee" : pd.fill;
     const pdImg2 = paddleSkinImg(pd.img);
     if (pdImg2) { const dh = 32, dw = dh * pdImg2.naturalWidth / pdImg2.naturalHeight; ctx.drawImage(pdImg2, x + sw / 2 - dw / 2, y + 8, dw, dh); }
@@ -4950,9 +5151,22 @@ function drawLocker() {
     ctx.restore();
     hotspots.push({ x, y, w: sw, h: sh, action: () => { save.paddle = pd.id; persist(); uiClick(); } });
   });
+  ctx.restore();
+  if (storeScrollMax > 0) {   // same draggable scrollbar the store uses
+    const barW = 8, trackX = innerX + innerW + 5, thumbH = Math.max(28, caseH * caseH / caseTotal);
+    const thumbY = sy + (caseH - thumbH) * (storeScroll / storeScrollMax);
+    storeBar = { x: trackX, w: barW, y: sy, h: caseH, thumbY, thumbH, thumbTotal: caseH - thumbH };
+    const hov = storeDragging || (mouseX >= trackX - 3 && mouseX <= trackX + barW + 3 && mouseY >= sy && mouseY <= sy + caseH);
+    ctx.save();
+    ctx.fillStyle = "rgba(120,180,200,0.18)"; roundRectPath(trackX, sy, barW, caseH, 4); ctx.fill();
+    ctx.fillStyle = hov ? "#7cf3ff" : "rgba(124,243,255,0.65)";
+    if (hov) { ctx.shadowColor = CY; ctx.shadowBlur = 8; }
+    roundRectPath(trackX, thumbY, barW, thumbH, 4); ctx.fill();
+    ctx.restore();
+  } else storeBar = null;
 
-  const lrows = Math.ceil(owned.length / lcols);
-  const py2 = sy + lrows * (sh + lgap) + 20;
+  // Powerup shelf sits at a FIXED y below the (scrolling) paddle case.
+  const py2 = sy + caseH + 30;
   ctx.save(); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = ui.title; ctx.font = "bold 14px " + ui.font;
   ctx.fillText("POWERUPS", p.px + 24, py2 - 4); ctx.restore();
   const invKeys = SHOP_ITEMS.map(s => s.key).filter(k => invCount(k) > 0);
@@ -5029,6 +5243,7 @@ function drawStats() {
     ["Arenas unlocked", save.boards.length + " / " + arenaTotal],
     ["Arenas beaten", (save.beaten || []).length],
     ["Paddles owned", save.paddles.length + " / " + PADDLES.length],
+    ["Sets completed", (save.setsDone || []).length + " / " + liveSets().length],
   ];
 
   const pw = Math.min(780, W * 0.92);
