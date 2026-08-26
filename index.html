@@ -146,7 +146,10 @@ let combo = 0;               // wall / obstacle bounces in the current rally
 let comboBank = 0;           // combo bonus coins earned this match (added to the payout)
 let comboFlash = 0;          // frame of the last combo tick (drives the counter pop)
 let ballGrowUntil = 0;   // BIG BALL powerup: ball is 1.8x while > playFrames
-function bs() { return ballGrowUntil > playFrames ? BALL_SIZE * 1.8 : BALL_SIZE; }
+// bs()/padH() take an override on the GUEST during online play with powerups, so the
+// ball/paddle SIZES match the host's authoritative sim (else the hitbox would drift).
+let netBallSize = null;
+function bs() { if (netBallSize != null) return netBallSize; return ballGrowUntil > playFrames ? BALL_SIZE * 1.8 : BALL_SIZE; }
 const MAX_TILT = 0.5;   // paddle can rotate up to ~29° each way (mouse wheel) for angled shots
 const TILT_KEY_SPEED = 0.045;   // per-frame paddle rotation when angling by keyboard (A/D, ←/→)
 const TILT_TOUCH_K = 0.006;     // touch: logical-px of horizontal slide → radians of paddle tilt
@@ -157,6 +160,7 @@ const cpu    = { x: W-20-PADDLE_W, y: H/2 - PADDLE_H/2, score: 0, name: "MORDOR"
 // Effective paddle height — grows while a "grow" powerup is active on that paddle.
 const GROW_MULT = 1.6, SHRINK_MULT = 0.55;
 function padH(p) {
+  if (p.netH != null) return p.netH;   // GUEST online: authoritative height from the host's snapshot
   if ((p.growUntil   || 0) > playFrames) return PADDLE_H * GROW_MULT;
   if ((p.shrinkUntil || 0) > playFrames) return PADDLE_H * SHRINK_MULT;
   return PADDLE_H;
@@ -398,6 +402,7 @@ function canTwoPlayer() { return !IS_TOUCH; }   // couch versus is a desktop-key
 // a one-time offer/answer code the players copy-paste to each other.
 let net = null;            // when a session is live: { role, pc, dc, phase, status, offerCode, answerCode, remote, padY, tilt, lastRecv }
 let netPlay = false;       // true while a NETWORKED match is actually running
+let netPowerups = false;   // online: whether the host enabled powerups for this match
 let netPaused = false;     // LOCAL pause overlay online — your paddle holds, the match plays on
 let netMenuIndex = 0;      // HOST / JOIN / BACK on the net menu
 let netMenuManual = false; // false = quick connect (PeerJS code/link); true = manual copy-paste fallback
@@ -977,7 +982,8 @@ function netReset() {
     try { net.pc && net.pc.close(); } catch (e) {}
     try { net.peer && net.peer.destroy(); } catch (e) {}   // tear down the PeerJS broker connection too
   }
-  net = null; netPlay = false; netPaused = false;
+  net = null; netPlay = false; netPaused = false; netPowerups = false;
+  netBallSize = null; player.netH = null; cpu.netH = null;   // clear any online powerup overrides
 }
 function netFail(msg) { if (net) { net.phase = "error"; net.status = msg; } }
 // The live data link is open — works for BOTH transports (manual RTCDataChannel
@@ -1042,12 +1048,12 @@ function netWireChannel(dc) {
 }
 function netSend(obj) { if (netChannelOpen()) { try { net.dc.send(JSON.stringify(obj)); } catch (e) {} } }
 
-// Connection established.
+// Connection established → into the pre-game LOBBY (both must ready up).
 function netOnOpen() {
   if (!net) return;
   net.phase = "connected"; net.status = "Connected!";
-  if (net.role === "host") netHostBeginMatch();
-  // guest just waits for the host's "start" + snapshots
+  if (net.role === "host") netEnterLobby();
+  else { net.lobby = net.lobby || { arena: 0, speed: "Normal", pow: false, hostReady: false, guestReady: false }; state = "netlobby"; }
 }
 function netOnDrop() {
   if (!net) return;
@@ -1057,15 +1063,60 @@ function netOnDrop() {
   else { net.status = "Connection lost — check the code and try again."; }
 }
 
-// HOST: kick off a networked match (classic 1v1 on arena 0's theme; no hazards or
-// powerups in Phase 1 so there's nothing to keep in sync but the ball + paddles).
+// ---- Online LOBBY: host picks arena / ball speed / powerups, both READY up, then
+// the host starts. The guest sees every change live (host broadcasts the lobby state).
+const NET_SPEEDS = ["Slow", "Normal", "Fast"];
+function netArenaList() { return MAPS.filter(m => m.available !== false); }   // any arena's LOOK is fair game online
+function netEnterLobby() {   // (re)enter the lobby; keeps prior settings on a rematch, resets ready flags
+  if (!net.lobby) net.lobby = { arena: MAPS.indexOf(netArenaList()[0]), speed: "Normal", pow: false };
+  net.lobby.hostReady = false; net.lobby.guestReady = false;
+  netPlay = false; netPaused = false;
+  state = "netlobby";
+  netSendLobby();
+}
+function netSendLobby() {
+  if (!net || !net.lobby) return;
+  const L = net.lobby;
+  netSend({ t: "lobby", a: L.arena, sp: L.speed, pw: L.pow, hr: L.hostReady, gr: L.guestReady });
+}
+// Host tweaks a setting → un-ready both players (so a change is always re-confirmed).
+function netLobbySet(mut) {
+  if (!net || net.role !== "host" || !net.lobby) return;
+  mut(net.lobby);
+  net.lobby.hostReady = false; net.lobby.guestReady = false;
+  netSendLobby();
+}
+function netLobbyCycleArena(dir) {
+  const list = netArenaList(), n = list.length;
+  const cur = list.findIndex(m => MAPS.indexOf(m) === net.lobby.arena);
+  const nx = ((cur < 0 ? 0 : cur) + dir + n) % n;
+  netLobbySet(L => L.arena = MAPS.indexOf(list[nx]));
+}
+function netLobbyCycleSpeed(dir) {
+  const i = NET_SPEEDS.indexOf(net.lobby.speed);
+  netLobbySet(L => L.speed = NET_SPEEDS[((i < 0 ? 1 : i) + dir + NET_SPEEDS.length) % NET_SPEEDS.length]);
+}
+function netLobbyTogglePow() { netLobbySet(L => L.pow = !L.pow); }
+function netToggleReady() {   // the LOCAL player readies / un-readies
+  if (!net || !net.lobby) return;
+  if (net.role === "host") { net.lobby.hostReady = !net.lobby.hostReady; netSendLobby(); netLobbyMaybeStart(); }
+  else { net.lobby.guestReady = !net.lobby.guestReady; netSend({ t: "ready", r: net.lobby.guestReady }); }
+}
+function netLobbyMaybeStart() {   // host only — both ready → go
+  if (net && net.role === "host" && net.lobby && net.lobby.hostReady && net.lobby.guestReady) netHostBeginMatch();
+}
+
+// HOST: start the match using the lobby's chosen arena / ball speed / powerups.
 function netHostBeginMatch() {
   netPlay = true; twoPlayer = false; netPaused = false;
-  selectedMap = 0;
-  applyArenaRules(MAPS[0]);
+  const L = net.lobby || { arena: 0, speed: "Normal", pow: false };
+  selectedMap = L.arena;
+  applyArenaRules(MAPS[selectedMap]);                    // theme + winning score
+  ballSpeedMul = BALL_SPEEDS[L.speed] || ballSpeedMul;   // lobby ball speed overrides the arena's
+  netPowerups = !!L.pow;
   player.name = "HOST"; cpu.name = "GUEST";
   net.remote = { y: 0.5, tilt: 0 };
-  netSend({ t: "start", a: 0, win: winScore });
+  netSend({ t: "start", a: selectedMap, win: winScore, sp: L.speed, pow: netPowerups });
   startCountdown(Math.random() < 0.5 ? -1 : 1);
 }
 
@@ -1085,6 +1136,16 @@ function netApplySnapshot(m) {
   trail.unshift({ x: ball.x, y: ball.y }); if (trail.length > 12) trail.pop();
   if (state === "over" && overStart === 0) { overStart = frame; if (m.s2 > m.s1) spawnConfetti(); }
   if (state !== "over") overStart = 0;
+  // Powerups (online, when enabled): mirror the host's authoritative sizes + star so
+  // the guest renders correctly and its OWN paddle hitbox stays aligned with the host.
+  if (m.pw !== undefined) {
+    player.netH = m.h1; cpu.netH = m.h2; netBallSize = m.bz;
+    player.shieldUntil = m.sh1 ? 1e9 : 0; cpu.shieldUntil = m.sh2 ? 1e9 : 0;
+    powerup = m.pw ? { x: m.pw.x, y: m.pw.y, r: m.pw.r, born: m.pw.b, type: POWERUP_TYPES[m.pw.k], key: m.pw.k } : null;
+  } else {
+    player.netH = null; cpu.netH = null; netBallSize = null; powerup = null;
+    player.shieldUntil = 0; cpu.shieldUntil = 0;
+  }
 }
 
 function netOnMessage(data) {
@@ -1094,12 +1155,17 @@ function netOnMessage(data) {
   if (!m || !net) return;
   net.lastRecv = frame;
   if (net.role === "guest") {
-    if (m.t === "start") {
+    if (m.t === "lobby") {   // host's live lobby state → mirror it and show the lobby
+      net.lobby = { arena: m.a, speed: m.sp, pow: m.pw, hostReady: m.hr, guestReady: m.gr };
+      netPlay = false; netPaused = false; state = "netlobby";
+    } else if (m.t === "start") {
       netPlay = true; twoPlayer = false;
       selectedMap = m.a || 0; applyArenaRules(MAPS[selectedMap]);
+      ballSpeedMul = BALL_SPEEDS[m.sp] || ballSpeedMul; netPowerups = !!m.pow;
       player.name = "HOST"; cpu.name = "GUEST"; winScore = m.win;
       player.score = 0; cpu.score = 0; trail.length = 0;
       activeObstacles = []; powerup = null;
+      player.netH = null; cpu.netH = null; netBallSize = null;
       net.padY = H / 2 - padH(cpu) / 2; net.tilt = 0;
       cpu.y = net.padY; overStart = 0; net.rematchAsked = false; netPaused = false;
       state = "countdown";
@@ -1108,7 +1174,8 @@ function netOnMessage(data) {
     } else if (m.t === "bye") { netOnDrop(); }
   } else {   // HOST receives from the guest
     if (m.t === "i") net.remote = { y: m.y, tilt: m.tilt };
-    else if (m.t === "rematch") { if (state === "over") netHostBeginMatch(); }   // guest asked to play again
+    else if (m.t === "ready") { if (net.lobby) { net.lobby.guestReady = !!m.r; netSendLobby(); netLobbyMaybeStart(); } }
+    else if (m.t === "rematch") { if (state === "over") netEnterLobby(); }   // guest wants to play again → back to lobby
     else if (m.t === "bye") netOnDrop();
   }
 }
@@ -1117,8 +1184,8 @@ function netOnMessage(data) {
 // The HOST starts a fresh match immediately; the GUEST asks the host to.
 function netRematch() {
   if (!netChannelOpen() || net.phase === "closed") return;
-  if (net.role === "host") netHostBeginMatch();
-  else { net.rematchAsked = true; netSend({ t: "rematch" }); }
+  if (net.role === "host") netEnterLobby();                         // host → back to the lobby to re-ready (and tweak settings)
+  else { net.rematchAsked = true; netSend({ t: "rematch" }); }      // guest → ask the host
 }
 
 // Called once per rendered frame from loop() — pumps input/state over the wire.
@@ -1129,10 +1196,17 @@ function netTick() {
     // X travels as a FRACTION of the field width so it lands in the same spot on a
     // screen of any aspect ratio (the two players' fields can be different widths).
     // Y is absolute — the logical height is a fixed 500 for everyone.
-    netSend({ t: "s", st, cf: countdownFrames, sd: serveDir,
+    const snap = { t: "s", st, cf: countdownFrames, sd: serveDir,
       bx: +(ball.x / W).toFixed(4), by: Math.round(ball.y),
       p1: Math.round(player.y), t1: +player.tilt.toFixed(3), s1: player.score,
-      p2: Math.round(cpu.y),    t2: +cpu.tilt.toFixed(3),    s2: cpu.score });
+      p2: Math.round(cpu.y),    t2: +cpu.tilt.toFixed(3),    s2: cpu.score };
+    if (netPowerups) {   // stream the star + authoritative paddle/ball sizes + shield state
+      snap.pw = powerup ? { x: Math.round(powerup.x), y: Math.round(powerup.y), r: Math.round(powerup.r), b: powerup.born, k: powerup.key } : 0;
+      snap.h1 = Math.round(padH(player)); snap.h2 = Math.round(padH(cpu));
+      snap.sh1 = player.shieldUntil > playFrames ? 1 : 0; snap.sh2 = cpu.shieldUntil > playFrames ? 1 : 0;
+      snap.bz = Math.round(bs());
+    }
+    netSend(snap);
   } else {
     // GUEST: drive its own paddle (the right one) locally, then send the target up.
     // While paused, we STOP reading input (paddle holds) but keep sending its held
@@ -1329,6 +1403,19 @@ document.addEventListener("keydown", e => {
   // Connect handshake screen — mouse-driven; Esc cancels
   if (state === "netconnect") {
     if (e.key === "Escape") { netReset(); state = "netmenu"; }
+    return;
+  }
+  // Online lobby — host edits settings; both ready up
+  if (state === "netlobby") {
+    if (net && net.role === "host") {
+      if (e.key === "ArrowLeft")  netLobbyCycleArena(-1);
+      if (e.key === "ArrowRight") netLobbyCycleArena(1);
+      if (e.key === "ArrowUp")    netLobbyCycleSpeed(-1);
+      if (e.key === "ArrowDown")  netLobbyCycleSpeed(1);
+      if (k === "p")              netLobbyTogglePow();
+    }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); netToggleReady(); }
+    if (e.key === "Escape") netQuit();
     return;
   }
 
@@ -1828,8 +1915,9 @@ function update() {
   if (hit(player)) bounce(player, 1);
   if (hit(cpu))    bounce(cpu, -1);
 
-  // Hazards + powerups are OFF in Phase-1 net play (classic 1v1 keeps the two
-  // browsers trivially in sync — only the ball + paddles need to match).
+  // Obstacles + boss stay OFF online (too much moving state to keep in sync). Powerups
+  // are OPTIONAL online (host toggles them in the lobby) — the host simulates them and
+  // streams the star + paddle/ball sizes so the guest stays in sync.
   if (!netPlay) {
     // Arena obstacles — moving/breakable pinball ricochet (only arenas that define them)
     updateObstacles();
@@ -1839,8 +1927,9 @@ function update() {
     // Boss arenas — telegraphed lightning/blade strikes (spawns + ricochet collision)
     updateBoss();
 
-    // Powerups (spawn / drift / catch)
-    updatePowerup();
+    updatePowerup();   // powerups (spawn / drift / catch)
+  } else if (netPowerups && net && net.role === "host") {
+    updatePowerup();   // online powerups — host-authoritative
   }
 
   // Scoring — a SHIELD on that side deflects the ball instead of conceding
@@ -2163,9 +2252,11 @@ function magnetPull(p) {
 }
 function spawnPowerup() {
   // Shoots out from the scoreboard (top-centre); type drawn from this arena's pool
-  const pool = MAPS[selectedMap].powerups || NEUTRAL_POOL;
-  const t = POWERUP_TYPES[pool[Math.floor(Math.random() * pool.length)]];
-  powerup = { x: W/2, y: H * 0.12, vx: (Math.random() * 2 - 1) * 1.3, vy: 0.9 + Math.random() * 0.6, r: 15, born: 0, type: t };
+  // (online always uses the neutral buff pool — no boss debuffs in friendly matches).
+  const pool = netPlay ? NEUTRAL_POOL : (MAPS[selectedMap].powerups || NEUTRAL_POOL);
+  const key = pool[Math.floor(Math.random() * pool.length)];
+  const t = POWERUP_TYPES[key];
+  powerup = { x: W/2, y: H * 0.12, vx: (Math.random() * 2 - 1) * 1.3, vy: 0.9 + Math.random() * 0.6, r: 15, born: 0, type: t, key };
 }
 function catchPowerup() {
   const t = powerup.type;
@@ -2184,7 +2275,7 @@ function catchPowerup() {
     beep(660, 0.08, "square", 0.12);
     setTimeout(() => beep(990, 0.12, "square", 0.12), 80);
   }
-  if (!twoPlayer) { save.stats.powerups++; persist(); }   // lifetime tally (1P progression only)
+  if (!twoPlayer && !netPlay) { save.stats.powerups++; persist(); }   // lifetime tally (1P progression only)
   powerup = null;
   powerupTimer = t.frames + powerupEvery();            // next one waits until 10s AFTER this effect ends
 }
@@ -2419,6 +2510,7 @@ function draw() {
   else if (state === "locker")     drawLocker();
   else if (state === "netmenu")    drawNetMenu();
   else if (state === "netconnect") drawNetConnect();
+  else if (state === "netlobby")   drawNetLobby();
   else if (state === "controls")   drawControls();
   else if (state === "quit")       drawQuit();
   else if (state === "countdown")  drawCountdown();
@@ -3342,6 +3434,81 @@ function drawNetManual(host) {
   }
 }
 
+// ---- Pre-game LOBBY: shared setup screen. Host edits arena / ball speed / powerups
+// (the guest sees every change live); both READY UP, then the host starts. ----
+function netLobbyRow(label, value, y, editable, onCycle) {
+  const rowW = Math.min(W * 0.6, 440), rowX = W/2 - rowW/2, rowH = H * 0.07;
+  const hov = editable && mouseX >= rowX && mouseX <= rowX + rowW && mouseY >= y && mouseY <= y + rowH;
+  ctx.save();
+  roundRectPath(rowX, y, rowW, rowH, 8);
+  ctx.fillStyle = hov ? "rgba(40,120,150,0.28)" : "rgba(10,26,36,0.55)"; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = hov ? "#7cf3ff" : "rgba(90,150,180,0.4)"; ctx.stroke();
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left"; ctx.fillStyle = "rgba(150,200,220,0.9)";
+  ctx.font = "bold " + Math.round(rowH * 0.32) + "px " + UI_FONT;
+  ctx.fillText(label, rowX + 16, y + rowH/2);
+  ctx.textAlign = "right"; ctx.fillStyle = "#eafcff";
+  ctx.font = "bold " + Math.round(rowH * 0.42) + "px 'Arial Black', Impact, sans-serif";
+  ctx.fillText(value, rowX + rowW - (editable ? 40 : 16), y + rowH/2);
+  if (editable) {
+    ctx.textAlign = "center"; ctx.fillStyle = "#7cf3ff";
+    ctx.font = "bold " + Math.round(rowH * 0.5) + "px " + UI_DISPLAY;
+    ctx.fillText("›", rowX + rowW - 20, y + rowH/2);
+  }
+  ctx.restore();
+  if (editable) hotspots.push({ x: rowX, y, w: rowW, h: rowH, action: onCycle });
+}
+function netReadyChip(label, ready, cx, y, isMe) {
+  const w = W * 0.28, h = H * 0.06, x = cx - w/2;
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  roundRectPath(x, y - h/2, w, h, 8);
+  ctx.fillStyle = ready ? "rgba(50,175,115,0.28)" : "rgba(10,26,36,0.55)"; ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = ready ? "#7dffb0" : "rgba(120,140,150,0.45)"; ctx.stroke();
+  ctx.fillStyle = ready ? "#8dffb8" : "rgba(180,200,210,0.8)";
+  ctx.font = "bold " + Math.round(h * 0.4) + "px " + UI_FONT;
+  ctx.fillText((ready ? "✓ " : "") + label + (isMe ? " (you)" : "") + (ready ? "" : "  …"), cx, y);
+  ctx.restore();
+}
+function drawNetLobby() {
+  if (!net || !net.lobby) { state = "netmenu"; return; }
+  const L = net.lobby, host = net.role === "host";
+  const map = MAPS[L.arena] || MAPS[0];
+  netTitle("MATCH LOBBY", host ? "set it up, then ready up" : "your host is choosing…");
+
+  // Arena preview + name (host gets ‹ › to change it; guest just watches)
+  const tw = Math.min(W * 0.3, H * 0.44), th = tw * 0.62;
+  const tx = W/2 - tw/2, ty = H * 0.26;
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#eafcff"; ctx.shadowColor = CY; ctx.shadowBlur = 12;
+  ctx.font = "bold " + Math.round(H * 0.038) + "px 'Arial Black', Impact, sans-serif";
+  ctx.fillText(map.name, W/2, ty - H * 0.035);
+  ctx.restore();
+  drawBoardThumb(map, tx, ty, tw, th, true);
+  if (host) {
+    const asz = H * 0.085;
+    arrowButton("‹", tx - asz - H * 0.02, ty + th/2, asz, () => netLobbyCycleArena(-1));
+    arrowButton("›", tx + tw + H * 0.02,  ty + th/2, asz, () => netLobbyCycleArena(1));
+  }
+
+  // Settings
+  const rowH = H * 0.07, gap = H * 0.018, r0 = ty + th + H * 0.045;
+  netLobbyRow("BALL SPEED", L.speed,            r0,                  host, () => netLobbyCycleSpeed(1));
+  netLobbyRow("POWERUPS",   L.pow ? "ON" : "OFF", r0 + rowH + gap,   host, () => netLobbyTogglePow());
+
+  // Ready chips + READY button
+  const chY = r0 + 2 * (rowH + gap) + H * 0.05;
+  netReadyChip("HOST",  L.hostReady,  W/2 - W * 0.17, chY, host);
+  netReadyChip("GUEST", L.guestReady, W/2 + W * 0.17, chY, !host);
+
+  const meReady = host ? L.hostReady : L.guestReady;
+  const bw = Math.min(320, W * 0.55), bh = H * 0.09, bx = W/2 - bw/2, by = chY + H * 0.07;
+  neonButton(meReady ? "✓ READY  ·  tap to cancel" : "READY UP", bx, by, bw, bh, meReady, () => netToggleReady());
+
+  neonButton("‹ LEAVE", W * 0.03, H * 0.04, 130, H * 0.07, false, () => netQuit());
+}
+
 // Online pause: a LOCAL overlay drawn over the still-live match. Your paddle holds
 // while you're here (the opponent keeps playing and can score), so it doubles as the
 // clean way to rage-quit instead of being stuck in the game.
@@ -3407,7 +3574,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.12", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.13", W - 16, H - 16);
   ctx.restore();
 }
 
