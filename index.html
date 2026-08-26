@@ -1204,7 +1204,7 @@ function netOnMessage(data) {
     if (m.t === "hello") { net.oppName = m.name; net.oppIcon = m.icon; }   // guest's identity
     else if (m.t === "i") net.remote = { y: m.y, tilt: m.tilt };
     else if (m.t === "ready") { if (net.lobby) { net.lobby.guestReady = !!m.r; netSendLobby(); netLobbyMaybeStart(); } }
-    else if (m.t === "rematch") { if (state === "over") netEnterLobby(); }   // guest wants to play again → back to lobby
+    else if (m.t === "rematch") { if (state === "over") netHostBeginMatch(); }   // guest wants an instant rematch
     else if (m.t === "tolobby") netEnterLobby();                             // guest bailed the match → both back to lobby
     else if (m.t === "bye") netOnDrop();
   }
@@ -1214,8 +1214,8 @@ function netOnMessage(data) {
 // The HOST starts a fresh match immediately; the GUEST asks the host to.
 function netRematch() {
   if (!netChannelOpen() || net.phase === "closed") return;
-  if (net.role === "host") netEnterLobby();                         // host → back to the lobby to re-ready (and tweak settings)
-  else { net.rematchAsked = true; netSend({ t: "rematch" }); }      // guest → ask the host
+  if (net.role === "host") netHostBeginMatch();                     // host → instant replay, same settings
+  else { net.rematchAsked = true; netSend({ t: "rematch" }); }      // guest → ask the host (auto-starts)
 }
 
 // Called once per rendered frame from loop() — pumps input/state over the wire.
@@ -1569,8 +1569,8 @@ document.addEventListener("keydown", e => {
   if (state === "over") {
     if (netPlay || (net && net.phase === "closed")) {   // online
       if (net && net.phase === "closed") { netQuit(); return; }        // dropped → leave
-      if (e.key === "Escape") { netQuit(); return; }                    // Esc → leave
-      if (k === "r" || e.key === "Enter") { netRematch(); return; }     // R / Enter → play again
+      if (k === "r" || e.key === "Enter") { netRematch(); return; }     // R / Enter → instant rematch
+      if (e.key === "Escape") { netToLobby(); return; }                 // Esc → back to lobby (leave from there)
       return;
     }
     if (k === "r" || e.key === "Enter") restart();
@@ -2678,20 +2678,20 @@ function draw() {
     }   // end 1P-only rewards
 
     const ui = curTheme().ui, bw = 190, bh = H * 0.085, gap = 14, by = H/2 + 138;
-    if (isNet) {   // online
+    if (isNet) {   // online — REMATCH (instant replay) or back to the LOBBY (leaving is done there)
       const dropped = net && net.phase === "closed";
       if (dropped) {   // connection gone — can't rematch, only leave
         btnUI("‹ EXIT", W/2 - bw/2, by, bw, bh, false, () => netQuit(), ui);
       } else if (net && net.role === "guest" && net.rematchAsked) {
-        // guest is waiting on the host to accept the rematch
+        // guest asked for a rematch — waiting on the host to start it
         ctx.save(); ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.fillStyle = "rgba(160,215,235,0.9)"; ctx.font = "italic 18px " + UI_FONT;
-        ctx.fillText("waiting for the host to start the rematch…", W/2, by - 4);
+        ctx.fillText("waiting for the host…", W/2, by - 4);
         ctx.restore();
-        btnUI("‹ EXIT", W/2 - bw/2, by + 40, bw, bh, false, () => netQuit(), ui);
-      } else {   // REMATCH + EXIT
+        btnUI("↩ LOBBY", W/2 - bw/2, by + 40, bw, bh, false, () => netToLobby(), ui);
+      } else {   // REMATCH + LOBBY
         btnUI("↻ REMATCH", W/2 - bw - gap/2, by, bw, bh, false, () => netRematch(), ui);
-        btnUI("‹ EXIT",     W/2 + gap/2,      by, bw, bh, false, () => netQuit(), ui);
+        btnUI("↩ LOBBY",   W/2 + gap/2,      by, bw, bh, false, () => netToLobby(), ui);
       }
     } else {
       btnUI("↻ PLAY AGAIN", W/2 - bw - gap/2, by, bw, bh, false, () => restart(), ui);
@@ -3768,7 +3768,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.17", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.18", W - 16, H - 16);
   ctx.restore();
 }
 
