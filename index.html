@@ -961,7 +961,7 @@ function startCountdown(dir) {
   combo = 0; comboBank = 0;          // reset the combo chain + banked bonus
   player.lastY = null; cpu.lastY = null;   // reset flick velocity tracking
   resetPowerups();                   // no leftover powerup / grow from a prior match
-  if (netPlay) { powerup = null; if (netObstacles) initNetObstacles(); else activeObstacles = []; }   // online: obstacles optional (any arena), no boss
+  if (netPlay) { powerup = null; bossState = null; activeObstacles = []; if (netObstacles) initNetObstacles(); }   // online: obstacles optional; boss arenas run their real attack
   else { initObstacles(); initBoss(); }   // fresh ice pillars + arm any boss attack
   // Loadout: CONSUME one of your chosen powerup and start the match with it active.
   startPowerup = null;
@@ -1171,7 +1171,8 @@ function netApplySnapshot(m) {
     player.netH = null; cpu.netH = null; netBallSize = null; powerup = null;
     player.shieldUntil = 0; cpu.shieldUntil = 0;
   }
-  if (m.obs) activeObstacles = m.obs.map(o => ({ x: o.x, y: o.y, w: o.w, h: o.h, angle: o.a, mat: o.m, hp: o.hp, maxHp: o.mh }));
+  if (m.bb) { bossState = { barriers: m.bb.map(b => ({ x: b.x, y: b.y, w: b.w, h: b.h, angle: b.a, mat: b.m, netSolid: b.s })) }; activeObstacles = []; }
+  else if (m.obs) { activeObstacles = m.obs.map(o => ({ x: o.x, y: o.y, w: o.w, h: o.h, angle: o.a, mat: o.m, hp: o.hp, maxHp: o.mh })); bossState = null; }
 }
 
 function netOnMessage(data) {
@@ -1191,7 +1192,7 @@ function netOnMessage(data) {
       ballSpeedMul = BALL_SPEEDS[m.sp] || ballSpeedMul; netPowerups = !!m.pow; netObstacles = !!m.ob;
       player.name = (net.oppIcon || "") + " " + (net.oppName || "Host"); cpu.name = netMyIcon() + " " + netMyName(); winScore = m.win;
       player.score = 0; cpu.score = 0; trail.length = 0;
-      activeObstacles = []; powerup = null;
+      activeObstacles = []; powerup = null; bossState = null;
       player.netH = null; cpu.netH = null; netBallSize = null;
       net.padY = H / 2 - padH(cpu) / 2; net.tilt = 0;
       cpu.y = net.padY; overStart = 0; net.rematchAsked = false; netPaused = false;
@@ -1235,8 +1236,12 @@ function netTick() {
       snap.sh1 = player.shieldUntil > playFrames ? 1 : 0; snap.sh2 = cpu.shieldUntil > playFrames ? 1 : 0;
       snap.bz = Math.round(bs());
     }
-    if (netObstacles) {   // stream obstacle positions/damage so the guest renders them in sync
-      snap.obs = activeObstacles.map(o => ({ x: Math.round(o.x), y: Math.round(o.y), w: Math.round(o.w), h: Math.round(o.h), a: +(o.angle || 0).toFixed(3), m: o.mat, hp: o.hp, mh: o.maxHp }));
+    if (netObstacles) {
+      if (bossState) {   // boss barriers: send a SOLID flag (host/guest frame counters differ, so timing can't cross the wire)
+        snap.bb = bossState.barriers.map(b => ({ x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h), a: +(b.angle || 0).toFixed(3), m: b.mat, s: (frame >= b.solidAt && frame < b.until) ? 1 : 0 }));
+      } else {   // moving obstacle positions/damage
+        snap.obs = activeObstacles.map(o => ({ x: Math.round(o.x), y: Math.round(o.y), w: Math.round(o.w), h: Math.round(o.h), a: +(o.angle || 0).toFixed(3), m: o.mat, hp: o.hp, mh: o.maxHp }));
+      }
     }
     netSend(snap);
   } else {
@@ -1983,9 +1988,13 @@ function update() {
     updatePowerup();   // powerups (spawn / drift / catch)
   } else if (net && net.role === "host") {   // online, host-authoritative
     if (netObstacles) {
-      updateObstacles();
-      const obs = currentObstacles();
-      for (const r of obs) if (ballHitsRect(r)) { bounceBallOffRect(r); break; }
+      if (bossState) {   // boss arena → its telegraphed attack (spawns + ricochet handled inside)
+        updateBoss();
+      } else {
+        updateObstacles();
+        const obs = currentObstacles();
+        for (const r of obs) if (ballHitsRect(r)) { bounceBallOffRect(r); break; }
+      }
     }
     if (netPowerups) updatePowerup();
   }
@@ -2090,17 +2099,13 @@ function initObstacles() {
   const gen = MAPS[selectedMap] && MAPS[selectedMap].obstacles;
   activeObstacles = gen ? gen() : [];
 }
-// Online, obstacles can be enabled on ANY arena — including boss arenas, which have
-// no obstacle generator of their own. Those get a themed default pair of movers.
-function netDefaultObstacles() {
-  const m = MAPS[selectedMap];
-  const mat = m && m.id === "storm" ? "storm" : (m && m.id === "sun" ? "sun" : "rock");
-  return [ mover(W * 0.42, H * 0.40, 16, H * 0.15,  0.25, mat, "y", H * 0.15, 0.020, 0),
-           mover(W * 0.58, H * 0.60, 16, H * 0.15, -0.25, mat, "y", H * 0.15, 0.020, Math.PI) ];
-}
+// Online, obstacles can be enabled on ANY arena. Non-boss arenas use their own
+// moving obstacles; BOSS arenas run their signature DYNAMIC attack instead (the
+// telegraphed barriers that randomly spawn, flash, then strike — the fun bit).
 function initNetObstacles() {
-  const gen = MAPS[selectedMap] && MAPS[selectedMap].obstacles;
-  activeObstacles = gen ? gen() : netDefaultObstacles();
+  bossState = null; activeObstacles = [];
+  if (MAPS[selectedMap] && MAPS[selectedMap].isBoss) initBoss();
+  else initObstacles();
 }
 function currentObstacles() { return activeObstacles; }
 // Drive the moving obstacles each frame (oscillate about their base position).
@@ -2271,7 +2276,8 @@ function drawBoss() {
   if (!bossState) return;
   for (const b of bossState.barriers) {
     const cx = b.x + b.w/2, cy = b.y + b.h/2;
-    if (frame < b.solidAt) {   // TELEGRAPH — flashing dashed warning outline
+    const telegraph = b.netSolid != null ? !b.netSolid : (frame < b.solidAt);   // guest uses the synced flag
+    if (telegraph) {   // TELEGRAPH — flashing dashed warning outline
       const blink = 0.35 + 0.65 * Math.abs(Math.sin(frame * 0.45));
       ctx.save();
       ctx.translate(cx, cy); ctx.rotate(b.angle || 0);
@@ -3675,11 +3681,12 @@ function drawProfile() {
 
 // Home profile card: LEVEL + XP bar, with the avatar + username nested inside below
 // it, all in one box. The whole card is the clickable target for the Profile screen.
-function drawHomeProfileCard(cx) {
+function drawHomeProfileCard(cx, cw) {
   const xp = save.xp || 0; let L = 1; while (xpForLevel(L + 1) <= xp) L++;
   const base = xpForLevel(L), next = xpForLevel(L + 1);
   const prog = next > base ? (xp - base) / (next - base) : 1;
-  const cw = Math.min(184, W * 0.26), ch = H * 0.185, x = cx - cw/2, y = H * 0.028;
+  cw = cw || Math.min(184, W * 0.26);
+  const ch = H * 0.185, x = cx - cw/2, y = H * 0.028;
   const hov = mouseX >= x && mouseX <= x + cw && mouseY >= y && mouseY <= y + ch;
   ctx.save();
   roundRectPath(x, y, cw, ch, 12);
@@ -3730,8 +3737,10 @@ function drawHome() {
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  drawCoinBalance(W * 0.13, H * 0.06);   // coin balance — top-LEFT, clear of the profile card
-  drawHomeProfileCard(W - 96);           // level + xp + avatar + name in one clickable card, top-right
+  // Profile card + coins grouped together in the top-right (card on the left, coins to its right)
+  const cardW = Math.min(160, W * 0.2), coinsCx = W - 66;
+  drawHomeProfileCard(coinsCx - 58 - cardW/2, cardW);
+  drawCoinBalance(coinsCx, H * 0.072);
 
   // Centered button stack under the title (7 items — sized to fit)
   const bw = Math.min(300, W * 0.34), bh = H * 0.056, bx = W / 2 - bw / 2, gap = H * 0.011;
@@ -3759,7 +3768,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.16", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.17", W - 16, H - 16);
   ctx.restore();
 }
 
