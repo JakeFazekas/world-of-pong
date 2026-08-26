@@ -1651,9 +1651,25 @@ function canvasPos(e) {
   };
 }
 
+// Drag the store scrollbar thumb to scroll (grab it, or click the track to jump there).
+function storeBarScrollTo(centerY) {
+  if (!storeBar || storeBar.thumbTotal <= 0) return;
+  storeScroll = Math.max(0, Math.min(storeScrollMax, (centerY - storeBar.thumbH / 2 - storeBar.y) / storeBar.thumbTotal * storeScrollMax));
+}
+canvas.addEventListener("mousedown", e => {
+  if (state !== "store" || !storeBar) return;
+  const p = canvasPos(e);
+  if (p.x >= storeBar.x - 6 && p.x <= storeBar.x + storeBar.w + 6 && p.y >= storeBar.y && p.y <= storeBar.y + storeBar.h) {
+    if (p.y >= storeBar.thumbY && p.y <= storeBar.thumbY + storeBar.thumbH) storeDragOff = p.y - storeBar.thumbY;   // grabbed the thumb
+    else { storeBarScrollTo(p.y); storeDragOff = storeBar.thumbH / 2; }                                             // clicked the track → jump
+    storeDragging = true; e.preventDefault();
+  }
+});
+window.addEventListener("mouseup", () => { storeDragging = false; });
 canvas.addEventListener("mousemove", e => {
   const p = canvasPos(e);
   mouseX = p.x; mouseY = p.y;
+  if (storeDragging && storeBar) { storeBarScrollTo(p.y - storeDragOff + storeBar.thumbH / 2); return; }
   kbNav = false;   // moving the mouse hands the highlight back to hover
   // The mouse only steers the paddle while the ball is (about to be) in play
   // (and never while an online pause overlay is up — your paddle holds).
@@ -3792,7 +3808,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.21", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.22", W - 16, H - 16);
   ctx.restore();
 }
 
@@ -4769,6 +4785,7 @@ const SHOP_ITEMS = [
 ];
 let shopSel = 0, storeTab = "powerups", buyFx = null;   // buyFx = { key, start } for the +1 pop
 let storeScroll = 0, storeScrollMax = 0, touchScrollY = null, storeTapX = null, storeTapY = 0, storeMoved = false;   // store list scroll + tap-vs-drag
+let storeBar = null, storeDragging = false, storeDragOff = 0;   // draggable scrollbar geometry + drag state
 function invCount(key) { return save.inventory[key] || 0; }
 function buyPowerup(key) {   // consumable — adds ONE, buy as many as you like
   const it = SHOP_ITEMS.find(x => x.key === key); if (!it) return;
@@ -4882,13 +4899,18 @@ function drawStore() {
     hotspots.push({ x, y, w: cellW, h: cellH, action: () => { shopSel = i; if (isPow) buyPowerup(it.key); else buyPaddleShop(it.id); } });
   });
   ctx.restore();
-  if (storeScrollMax > 0) {   // scrollbar
-    const trackX = gx + gridW + 4, thumbH = Math.max(28, viewH * viewH / totalH);
+  if (storeScrollMax > 0) {   // draggable scrollbar
+    const barW = 8, trackX = gx + gridW + 4, thumbH = Math.max(30, viewH * viewH / totalH);
+    const thumbY = viewTop + (viewH - thumbH) * (storeScroll / storeScrollMax);
+    storeBar = { x: trackX, w: barW, y: viewTop, h: viewH, thumbY, thumbH, thumbTotal: viewH - thumbH };
+    const hov = storeDragging || (mouseX >= trackX - 3 && mouseX <= trackX + barW + 3 && mouseY >= viewTop && mouseY <= viewTop + viewH);
     ctx.save();
-    ctx.fillStyle = "rgba(120,180,200,0.15)"; roundRectPath(trackX, viewTop, 4, viewH, 2); ctx.fill();
-    ctx.fillStyle = "rgba(124,243,255,0.6)"; roundRectPath(trackX, viewTop + (viewH - thumbH) * (storeScroll / storeScrollMax), 4, thumbH, 2); ctx.fill();
+    ctx.fillStyle = "rgba(120,180,200,0.18)"; roundRectPath(trackX, viewTop, barW, viewH, 4); ctx.fill();
+    ctx.fillStyle = hov ? "#7cf3ff" : "rgba(124,243,255,0.65)";
+    if (hov) { ctx.shadowColor = CY; ctx.shadowBlur = 8; }
+    roundRectPath(trackX, thumbY, barW, thumbH, 4); ctx.fill();
     ctx.restore();
-  }
+  } else storeBar = null;
   const backW = 180, backH = 44;
   btnUI("‹ BACK", W / 2 - backW / 2, p.py + ph - 50, backW, backH, false, () => { homeIndex = 2; state = "home"; }, ui);
 }
@@ -4903,9 +4925,12 @@ function drawLocker() {
   ctx.save(); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = ui.title; ctx.font = "bold 14px " + ui.font;
   ctx.fillText("PADDLES  ·  tap to equip", p.px + 24, p.py + 66); ctx.restore();
   const owned = PADDLES.filter(pd => paddleUnlocked(pd));
-  const sw = Math.min(96, (pw - 60) / Math.max(1, owned.length) - 10), sh = 74, sy = p.py + 82;
+  // Grid so cells stay wide enough for the names (one cramped row shrank long names like CHOCOLATE).
+  const lgap = 10, lcols = Math.max(1, Math.min(owned.length, Math.floor((pw - 48 + lgap) / (92 + lgap))));
+  const sw = (pw - 48 - (lcols - 1) * lgap) / lcols, sh = 74, sy = p.py + 82;
   owned.forEach((pd, i) => {
-    const x = p.px + 24 + i * (sw + 10), y = sy, equipped = save.paddle === pd.id;
+    const col = i % lcols, row = (i - col) / lcols;
+    const x = p.px + 24 + col * (sw + lgap), y = sy + row * (sh + lgap), equipped = save.paddle === pd.id;
     const active = mouseX >= x && mouseX <= x + sw && mouseY >= y && mouseY <= y + sh;
     ctx.save();
     roundRectPath(x, y, sw, sh, 8);
@@ -4926,7 +4951,8 @@ function drawLocker() {
     hotspots.push({ x, y, w: sw, h: sh, action: () => { save.paddle = pd.id; persist(); uiClick(); } });
   });
 
-  const py2 = sy + sh + 30;
+  const lrows = Math.ceil(owned.length / lcols);
+  const py2 = sy + lrows * (sh + lgap) + 20;
   ctx.save(); ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillStyle = ui.title; ctx.font = "bold 14px " + ui.font;
   ctx.fillText("POWERUPS", p.px + 24, py2 - 4); ctx.restore();
   const invKeys = SHOP_ITEMS.map(s => s.key).filter(k => invCount(k) > 0);
