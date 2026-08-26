@@ -36,6 +36,11 @@
 <body>
   <canvas id="game"></canvas>
 
+<!-- PeerJS: a free public WebRTC broker that powers the one-click "Play a Friend"
+     quick-connect (host shares a short code/link, friend joins with no reply step).
+     Online-play only; if it can't load, the copy-paste fallback still works. -->
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+
 <script>
 // --- PWA bootstrap: generate an app icon + web manifest inline (no extra files)
 // so the game is installable ("Add to Home Screen") and launches fullscreen. ---
@@ -395,6 +400,7 @@ let net = null;            // when a session is live: { role, pc, dc, phase, sta
 let netPlay = false;       // true while a NETWORKED match is actually running
 let netPaused = false;     // LOCAL pause overlay online — your paddle holds, the match plays on
 let netMenuIndex = 0;      // HOST / JOIN / BACK on the net menu
+let netMenuManual = false; // false = quick connect (PeerJS code/link); true = manual copy-paste fallback
 let pauseIndex = 0;        // Resume / Restart / Controls / Settings / Quit on the pause menu
 let controlsReturn = "home";  // where the Controls screen's BACK returns to ("pause" | "home")
 let kbNav = false;         // true while navigating by keyboard (drives the highlight)
@@ -967,16 +973,22 @@ function netIceComplete(pc) {
 }
 
 function netReset() {
-  if (net && net.pc) { try { net.pc.close(); } catch (e) {} }
+  if (net) {
+    try { net.pc && net.pc.close(); } catch (e) {}
+    try { net.peer && net.peer.destroy(); } catch (e) {}   // tear down the PeerJS broker connection too
+  }
   net = null; netPlay = false; netPaused = false;
 }
 function netFail(msg) { if (net) { net.phase = "error"; net.status = msg; } }
+// The live data link is open — works for BOTH transports (manual RTCDataChannel
+// has .readyState, a PeerJS DataConnection has .open).
+function netChannelOpen() { const d = net && net.dc; return !!d && (d.readyState === "open" || d.open === true); }
 
 // HOST: create the peer, the data channel, and an offer code to hand out.
 async function netStartHost() {
   if (!netSupported()) { net = { role: "host", phase: "error", status: "This browser can't do WebRTC." }; return; }
   const pc = new RTCPeerConnection(NET_ICE);
-  net = { role: "host", pc, dc: null, phase: "offer", status: "Preparing invite…", offerCode: "", answerCode: "", remote: null, padY: 0, tilt: 0, lastRecv: 0 };
+  net = { role: "host", mode: "manual", pc, dc: null, phase: "offer", status: "Preparing invite…", offerCode: "", answerCode: "", remote: null, padY: 0, tilt: 0, lastRecv: 0 };
   const dc = pc.createDataChannel("game", { ordered: true });
   net.dc = dc;
   netWireChannel(dc);
@@ -1028,7 +1040,7 @@ function netWireChannel(dc) {
   dc.onclose = () => netOnDrop();
   dc.onmessage = e => netOnMessage(e.data);
 }
-function netSend(obj) { if (net && net.dc && net.dc.readyState === "open") { try { net.dc.send(JSON.stringify(obj)); } catch (e) {} } }
+function netSend(obj) { if (netChannelOpen()) { try { net.dc.send(JSON.stringify(obj)); } catch (e) {} } }
 
 // Connection established.
 function netOnOpen() {
@@ -1076,7 +1088,10 @@ function netApplySnapshot(m) {
 }
 
 function netOnMessage(data) {
-  let m; try { m = JSON.parse(data); } catch (e) { return; }
+  // Manual RTCDataChannel delivers a string; a PeerJS DataConnection may deliver
+  // the already-parsed object — accept both.
+  let m; try { m = typeof data === "string" ? JSON.parse(data) : data; } catch (e) { return; }
+  if (!m || !net) return;
   net.lastRecv = frame;
   if (net.role === "guest") {
     if (m.t === "start") {
@@ -1101,14 +1116,14 @@ function netOnMessage(data) {
 // Play again without re-doing the handshake — the DataChannel is still open.
 // The HOST starts a fresh match immediately; the GUEST asks the host to.
 function netRematch() {
-  if (!net || net.phase === "closed" || !net.dc || net.dc.readyState !== "open") return;
+  if (!netChannelOpen() || net.phase === "closed") return;
   if (net.role === "host") netHostBeginMatch();
   else { net.rematchAsked = true; netSend({ t: "rematch" }); }
 }
 
 // Called once per rendered frame from loop() — pumps input/state over the wire.
 function netTick() {
-  if (!net || !net.dc || net.dc.readyState !== "open" || !netPlay) return;
+  if (!netChannelOpen() || !netPlay) return;
   if (net.role === "host") {
     const st = state === "countdown" ? 0 : state === "playing" ? 1 : state === "over" ? 2 : 1;
     // X travels as a FRACTION of the field width so it lands in the same spot on a
@@ -1140,6 +1155,57 @@ function netQuit() {
   netSend({ t: "bye" });
   netReset();
   homeIndex = 0; state = "home";
+}
+
+// ---- QUICK CONNECT (PeerJS public broker): one short code / clickable link, no
+// reply step. Falls back to the manual copy-paste flow above if the broker is down.
+const NET_PREFIX = "worldofpong-";   // namespaces our ids on the shared public broker
+let pendingJoinCode = null;          // set from a ?join=CODE link, auto-joined after the loading tap
+function peerReady() { return typeof Peer !== "undefined"; }
+function netCode() {   // 4 chars, no look-alikes (no O/0/I/1) — easy to read & type
+  const A = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let c = ""; for (let i = 0; i < 4; i++) c += A[Math.floor(Math.random() * A.length)];
+  return c;
+}
+function netJoinLink(code) { return location.origin + location.pathname + "?join=" + code; }
+function netPeerError(err) {
+  const t = err && err.type;
+  let msg = "Couldn't connect — try again.";
+  if (t === "peer-unavailable")       msg = "No game found with that code — double-check it with your friend.";
+  else if (t === "unavailable-id")    msg = "That code's in use — go back and host again for a fresh one.";
+  else if (t === "browser-incompatible") msg = "This browser can't do WebRTC.";
+  else if (t === "network" || t === "server-error" || t === "socket-error" || t === "disconnected")
+    msg = "Broker unreachable — try again, or use 'Manual codes' below.";
+  if (net) { net.phase = "error"; net.status = msg; }
+}
+function netWirePeerConn(conn) {
+  conn.on("open",  () => netOnOpen());
+  conn.on("data",  (d) => netOnMessage(d));
+  conn.on("close", () => netOnDrop());
+  conn.on("error", () => netOnDrop());
+}
+// HOST: register a short id on the broker and wait for the guest to dial in.
+function netQuickHost() {
+  if (!peerReady()) { net = { role: "host", mode: "quick", phase: "error", status: "Online library didn't load — refresh, or use Manual codes." }; return; }
+  const code = netCode();
+  net = { role: "host", mode: "quick", phase: "starting", status: "Setting up your room…", code, dc: null, remote: null, padY: 0, tilt: 0, lastRecv: 0 };
+  const peer = new Peer(NET_PREFIX + code);
+  net.peer = peer;
+  peer.on("open", () => { if (net) { net.phase = "hosting"; net.status = "Share your code or link, then wait…"; } });
+  peer.on("connection", (conn) => { if (net) { net.dc = conn; netWirePeerConn(conn); } });
+  peer.on("error", netPeerError);
+}
+// GUEST: dial the host's short code.
+function netQuickJoin(code) {
+  code = (code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!code) return;
+  if (!peerReady()) { net = { role: "guest", mode: "quick", phase: "error", status: "Online library didn't load — refresh and try again." }; state = "netconnect"; return; }
+  net = { role: "guest", mode: "quick", phase: "joining", status: "Connecting to " + code + "…", code, dc: null, padY: 0, tilt: 0, lastRecv: 0 };
+  const peer = new Peer();
+  net.peer = peer;
+  peer.on("open", () => { if (net) { const conn = peer.connect(NET_PREFIX + code, { reliable: true }); net.dc = conn; netWirePeerConn(conn); } });
+  peer.on("error", netPeerError);
+  state = "netconnect";
 }
 
 // Clipboard helpers — copy the code out, or paste one in (needs https or localhost;
@@ -1253,8 +1319,8 @@ document.addEventListener("keydown", e => {
     if (e.key === "ArrowUp")   netMenuIndex = (netMenuIndex + 2) % 3;
     if (e.key === "ArrowDown") netMenuIndex = (netMenuIndex + 1) % 3;
     if (e.key === "Enter") {
-      if (netMenuIndex === 0) { netStartHost(); state = "netconnect"; }
-      else if (netMenuIndex === 1) { net = { role: "guest", phase: "paste", status: "Paste the invite code your friend sent you.", offerCode: "", answerCode: "" }; state = "netconnect"; }
+      if (netMenuIndex === 0) netMenuHost();
+      else if (netMenuIndex === 1) netMenuJoin();
       else { netReset(); homeIndex = 0; state = "home"; }
     }
     if (e.key === "Escape") { netReset(); homeIndex = 0; state = "home"; }
@@ -1455,7 +1521,14 @@ const IS_TOUCH = ("ontouchstart" in window) || navigator.maxTouchPoints > 0;
 // hit something (loading/celebration/a button) so the caller can stop there.
 function handleTap(px, py) {
   mouseX = px; mouseY = py;   // so directional row-clicks read the true position
-  if (state === "loading") { uiClick(); clickFx = { x: px, y: py, start: frame }; state = "home"; return true; }
+  if (state === "loading") {
+    uiClick(); clickFx = { x: px, y: py, start: frame };
+    // Arrived via a shared "?join=CODE" link → jump straight into joining that game
+    // (this first tap is also the gesture browsers need before audio can start).
+    if (pendingJoinCode) { const c = pendingJoinCode; pendingJoinCode = null; netQuickJoin(c); }
+    else state = "home";
+    return true;
+  }
   if (state === "unlockfx") { finishUnlockFx(); return true; }
   for (const h of hotspots) {
     if (px >= h.x && px <= h.x + h.w && py >= h.y && py <= h.y + h.h) {
@@ -3027,7 +3100,7 @@ function drawLoading() {
     ctx.shadowColor = CY; ctx.shadowBlur = 16;
     ctx.fillStyle = "rgba(234,252,255," + pulse.toFixed(3) + ")";
     ctx.font = "bold " + Math.round(H * 0.032) + "px 'Arial Black', Impact, sans-serif";
-    ctx.fillText(IS_TOUCH ? "TAP TO START" : "CLICK TO START", W/2, by + 48);
+    ctx.fillText(pendingJoinCode ? ((IS_TOUCH ? "TAP" : "CLICK") + " TO JOIN YOUR FRIEND") : (IS_TOUCH ? "TAP TO START" : "CLICK TO START"), W/2, by + 48);
   }
   ctx.restore();
 }
@@ -3148,23 +3221,36 @@ function netTitle(txt, sub) {
   ctx.restore();
 }
 
+// Actions for the two connect modes — shared by the mouse buttons and the keyboard.
+function netMenuHost() { if (netMenuManual) { netStartHost(); state = "netconnect"; } else { netQuickHost(); state = "netconnect"; } }
+function netMenuJoin() {
+  if (netMenuManual) { net = { role: "guest", mode: "manual", phase: "paste", status: "Paste the invite code your friend sent you.", offerCode: "", answerCode: "" }; state = "netconnect"; }
+  else { const c = (typeof prompt === "function") ? prompt("Enter your friend's 4-letter code:") : null; if (c) netQuickJoin(c); }
+}
 // The HOST / JOIN / BACK chooser.
 function drawNetMenu() {
-  netTitle("PLAY A FRIEND", "same Wi-Fi  ·  no account, no server");
+  netTitle("PLAY A FRIEND", netMenuManual ? "manual codes  ·  backup if quick-connect fails" : "one code or link  ·  no account, no server");
   const bw = Math.min(320, W * 0.5), bh = H * 0.11, bx = W / 2 - bw / 2, gap = H * 0.03;
   const by = H * 0.37;
   const items = [
-    { label: "🎮  HOST GAME",  action: () => { netStartHost(); state = "netconnect"; } },
-    { label: "🔗  JOIN GAME",  action: () => { net = { role: "guest", phase: "paste", status: "Paste the invite code your friend sent you.", offerCode: "", answerCode: "" }; state = "netconnect"; } },
+    { label: "🎮  HOST GAME",  action: netMenuHost },
+    { label: "🔗  JOIN GAME",  action: netMenuJoin },
     { label: "‹  BACK",         action: () => { netReset(); homeIndex = 0; state = "home"; } },
   ];
   items.forEach((it, i) => neonButton(it.label, bx, by + i * (bh + gap), bw, bh, netMenuIndex === i, it.action));
 
+  // Mode toggle / fallback link
+  const link = netMenuManual ? "‹ back to quick connect" : "trouble connecting?  use manual codes";
   ctx.save();
-  ctx.textAlign = "center"; ctx.fillStyle = "rgba(150,180,195,0.7)";
-  ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("Best on the deployed (https) build — WebRTC needs it.", W / 2, H * 0.9);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const ly = H * 0.9;
+  ctx.font = Math.round(H * 0.026) + "px 'Courier New', monospace";
+  const lw = ctx.measureText(link).width;
+  const hov = mouseX >= W/2 - lw/2 && mouseX <= W/2 + lw/2 && mouseY >= ly - 16 && mouseY <= ly + 16;
+  ctx.fillStyle = hov ? "#7cf3ff" : "rgba(150,180,195,0.7)";
+  ctx.fillText(link, W / 2, ly);
   ctx.restore();
+  hotspots.push({ x: W/2 - lw/2, y: ly - 16, w: lw, h: 32, action: () => { netMenuManual = !netMenuManual; } });
 }
 
 // Draw one big action button centered, returns nothing (pushes its own hotspot).
@@ -3181,11 +3267,47 @@ function netStepText(txt, cy, strong) {
   ctx.restore();
 }
 
-// The copy-paste handshake screen (role + phase decide what's shown).
+// The connect screen — dispatches to the quick (PeerJS) or manual (copy-paste) UI.
 function drawNetConnect() {
   if (!net) { state = "netmenu"; return; }
   const host = net.role === "host";
+  if (net.mode === "quick") drawNetQuick(host);
+  else drawNetManual(host);
+  neonButton("‹ CANCEL", W * 0.03, H * 0.04, 130, H * 0.07, false, () => { netReset(); state = "netmenu"; });
+}
+
+// Quick connect: one short code + a clickable link; the guest just joins, no reply.
+function drawNetQuick(host) {
   netTitle(host ? "HOSTING" : "JOINING", null);
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = net.phase === "error" ? "#ff8a8a" : "rgba(180,220,235,0.9)";
+  ctx.font = Math.round(H * 0.028) + "px 'Courier New', monospace";
+  ctx.fillText(net.status || "", W / 2, H * 0.29);
+  ctx.restore();
+
+  if (host) {
+    // The big shareable code
+    ctx.save();
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(150,200,220,0.85)"; ctx.font = Math.round(H * 0.03) + "px 'Courier New', monospace";
+    ctx.fillText("YOUR CODE", W / 2, H * 0.4);
+    ctx.fillStyle = "#eafcff"; ctx.shadowColor = CY; ctx.shadowBlur = 24;
+    ctx.font = "bold " + Math.round(H * 0.17) + "px 'Arial Black', Impact, sans-serif";
+    ctx.fillText(net.code || "····", W / 2, H * 0.53);
+    ctx.restore();
+    const bw = Math.min(240, W * 0.42), bh = H * 0.09, gap = 16;
+    neonButton("🔗 COPY LINK", W/2 - bw - gap/2, H * 0.66, bw, bh, false, () => netCopy(netJoinLink(net.code), "Link copied! Send it — they just tap it to join."));
+    neonButton("📋 COPY CODE", W/2 + gap/2,      H * 0.66, bw, bh, false, () => netCopy(net.code, "Code copied! Send it to your friend."));
+    netStepText("They tap the link — or hit JOIN and enter the code.", H * 0.8, false);
+  } else {
+    netStepText(net.phase === "error" ? "" : "Connecting to your friend…", H * 0.5, true);
+  }
+}
+
+// Manual copy-paste handshake (fallback if the broker is down).
+function drawNetManual(host) {
+  netTitle(host ? "HOSTING (manual)" : "JOINING (manual)", null);
 
   // status line
   ctx.save();
@@ -3218,8 +3340,6 @@ function drawNetConnect() {
       netStepText("…then wait — the match starts on its own.", H * 0.72, false);
     }
   }
-
-  neonButton("‹ CANCEL", W * 0.03, H * 0.04, 130, H * 0.07, false, () => { netReset(); state = "netmenu"; });
 }
 
 // Online pause: a LOCAL overlay drawn over the still-live match. Your paddle holds
@@ -3287,7 +3407,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.11", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.12", W - 16, H - 16);
   ctx.restore();
 }
 
@@ -4621,6 +4741,10 @@ function loop(t) {
   draw();
   requestAnimationFrame(loop);
 }
+// Opened via a shared invite link (?join=CODE)? Remember the code — we auto-join
+// on the first tap (the gesture that also unlocks audio). See handleTap "loading".
+try { const jp = new URLSearchParams(location.search).get("join"); if (jp) pendingJoinCode = jp; } catch (e) {}
+
 resize();   // size the canvas to the window before the first frame
 requestAnimationFrame(loop);
 </script>
