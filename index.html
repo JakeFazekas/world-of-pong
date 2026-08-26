@@ -3685,7 +3685,7 @@ function drawHomeProfileCard(cx, cw) {
   const xp = save.xp || 0; let L = 1; while (xpForLevel(L + 1) <= xp) L++;
   const base = xpForLevel(L), next = xpForLevel(L + 1);
   const prog = next > base ? (xp - base) / (next - base) : 1;
-  cw = cw || Math.min(184, W * 0.26);
+  cw = cw || Math.min(228, W * 0.3);
   const ch = H * 0.185, x = cx - cw/2, y = H * 0.028;
   const hov = mouseX >= x && mouseX <= x + cw && mouseY >= y && mouseY <= y + ch;
   ctx.save();
@@ -3707,17 +3707,21 @@ function drawHomeProfileCard(cx, cw) {
   // subtle divider
   ctx.strokeStyle = "rgba(90,150,180,0.25)"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(x + 14, y + ch * 0.52); ctx.lineTo(x + cw - 14, y + ch * 0.52); ctx.stroke();
-  // Avatar + username, centered as a unit under the bar
-  const nm = netMyName();
-  ctx.font = "bold " + Math.round(H * 0.03) + "px " + UI_FONT;
-  const nmW = ctx.measureText(nm).width, emW = H * 0.05, gap2 = 8, totalW = emW + gap2 + nmW;
-  const sx = cx - totalW/2, ry = y + ch * 0.76;
-  ctx.textAlign = "left";
-  ctx.font = Math.round(H * 0.042) + "px " + UI_FONT;
-  ctx.fillText(netMyIcon(), sx, ry);
-  ctx.fillStyle = "rgba(222,242,250,0.95)";
-  ctx.font = "bold " + Math.round(H * 0.03) + "px " + UI_FONT;
-  ctx.fillText(nm, sx + emW + gap2, ry);
+  // Bottom row: avatar + username + coins, centered together as one unit
+  const nm = netMyName(), coins = String(save.coins);
+  const nameF = Math.round(H * 0.028), coinF = Math.round(H * 0.03);
+  const emW = H * 0.046, coinR = H * 0.017, g1 = 8, g2 = 14, g3 = 7;
+  ctx.font = "bold " + nameF + "px " + UI_FONT; const nmW = ctx.measureText(nm).width;
+  ctx.font = "bold " + coinF + "px 'Arial Black', Impact, sans-serif"; const coinNumW = ctx.measureText(coins).width;
+  const totalW = emW + g1 + nmW + g2 + coinR * 2 + g3 + coinNumW;
+  let cxr = cx - totalW / 2; const ry = y + ch * 0.77;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.font = Math.round(H * 0.042) + "px " + UI_FONT; ctx.fillStyle = "#fff";
+  ctx.fillText(netMyIcon(), cxr, ry); cxr += emW + g1;
+  ctx.fillStyle = "rgba(222,242,250,0.95)"; ctx.font = "bold " + nameF + "px " + UI_FONT;
+  ctx.fillText(nm, cxr, ry); cxr += nmW + g2;
+  drawCoin(cxr + coinR, ry, coinR); cxr += coinR * 2 + g3;
+  drawGoldText(coins, cxr, ry, coinF, "left");
   ctx.restore();
   hotspots.push({ x, y, w: cw, h: ch, action: () => { profileSel = 0; state = "profile"; } });
 }
@@ -3737,10 +3741,9 @@ function drawHome() {
   ctx.shadowBlur = 0;
   ctx.restore();
 
-  // Profile card + coins grouped together in the top-right (card on the left, coins to its right)
-  const cardW = Math.min(160, W * 0.2), coinsCx = W - 66;
-  drawHomeProfileCard(coinsCx - 58 - cardW/2, cardW);
-  drawCoinBalance(coinsCx, H * 0.072);
+  // Profile card (level + xp + avatar + name + coins, all inside), top-right corner
+  const cardW = Math.min(228, W * 0.3);
+  drawHomeProfileCard(W - 16 - cardW/2, cardW);
 
   // Centered button stack under the title (7 items — sized to fit)
   const bw = Math.min(300, W * 0.34), bh = H * 0.056, bx = W / 2 - bw / 2, gap = H * 0.011;
@@ -3768,7 +3771,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.18", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.19", W - 16, H - 16);
   ctx.restore();
 }
 
