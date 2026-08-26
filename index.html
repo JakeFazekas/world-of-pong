@@ -1356,7 +1356,7 @@ function netPasteThen(cb) {
 function activateHome() {
   if (homeIndex === 0)      { mapIndex = 0; mapScroll = 0; state = "mapselect"; }   // Start — snap to arena 1 (no leftover-scroll slide)
   else if (homeIndex === 1) { netMenuIndex = 0; netReset(); state = "netmenu"; }   // Play a Friend (online)
-  else if (homeIndex === 2) { storeTab = "powerups"; shopSel = 0; state = "store"; }   // Store
+  else if (homeIndex === 2) { storeTab = "powerups"; shopSel = 0; storeScroll = 0; state = "store"; }   // Store
   else if (homeIndex === 3) { state = "locker"; }                        // Locker
   else if (homeIndex === 4) { state = "stats"; }                          // Stats
   else if (homeIndex === 5) { settingsReturn = "home"; settingsIndex = 0; state = "settings"; }
@@ -1428,10 +1428,11 @@ document.addEventListener("keydown", e => {
   // Store — ← / → switch tabs, ↑ / ↓ move within the tab, Enter buys, Esc back
   if (state === "store") {
     const items = storeTab === "powerups" ? SHOP_ITEMS : PADDLES;
-    if (e.key === "ArrowLeft")  { storeTab = "powerups"; shopSel = 0; }
-    if (e.key === "ArrowRight") { storeTab = "paddles";  shopSel = 0; }
+    if (e.key === "ArrowLeft")  { storeTab = "powerups"; shopSel = 0; storeScroll = 0; }
+    if (e.key === "ArrowRight") { storeTab = "paddles";  shopSel = 0; storeScroll = 0; }
     if (e.key === "ArrowUp")    shopSel = (shopSel - 1 + items.length) % items.length;
     if (e.key === "ArrowDown")  shopSel = (shopSel + 1) % items.length;
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") storeScroll = Math.max(0, Math.min(storeScrollMax, Math.floor(shopSel / 2) * 86 - 90));   // keep the selection in view
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (storeTab === "powerups") buyPowerup(SHOP_ITEMS[shopSel].key); else buyPaddleShop(PADDLES[shopSel].id); }
     if (e.key === "Escape") { homeIndex = 2; state = "home"; }
     return;
@@ -1663,6 +1664,7 @@ canvas.addEventListener("mousemove", e => {
 });
 // Mouse wheel angles the paddle (pinball-style) for aimed shots — a skill layer.
 canvas.addEventListener("wheel", e => {
+  if (state === "store") { e.preventDefault(); storeScroll = Math.max(0, Math.min(storeScrollMax, storeScroll + Math.sign(e.deltaY) * 46)); return; }
   if ((state === "playing" && !paused) || state === "countdown") {
     e.preventDefault();
     if (netPlay && net && net.role === "guest") net.tilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, net.tilt + Math.sign(e.deltaY) * 0.06));
@@ -1838,6 +1840,7 @@ function netGuestTouch() { return netPlay && net && net.role === "guest"; }
 canvas.addEventListener("touchstart", e => {
   initAudio();
   const p = touchPos(e);
+  if (state === "store") { touchScrollY = p.y; storeTapX = p.x; storeTapY = p.y; storeMoved = false; e.preventDefault(); return; }   // defer the tap until touchend (drag = scroll)
   if (handleTap(p.x, p.y)) { e.preventDefault(); return; }   // tapped a button (e.g. pause)
   if (touchInPlay()) {
     if (netGuestTouch()) { net.padY = Math.max(0, Math.min(H - padH(cpu), p.y - padH(cpu)/2)); touchBaseX = p.x; touchBaseTilt = net.tilt; }
@@ -1846,6 +1849,11 @@ canvas.addEventListener("touchstart", e => {
   e.preventDefault();   // cancel the synthetic click so nothing double-fires
 }, { passive: false });
 canvas.addEventListener("touchmove", e => {
+  if (state === "store") {
+    const p = touchPos(e);
+    if (touchScrollY != null) { const dy = p.y - touchScrollY; if (Math.abs(dy) > 3) storeMoved = true; storeScroll = Math.max(0, Math.min(storeScrollMax, storeScroll - dy)); touchScrollY = p.y; }
+    e.preventDefault(); return;
+  }
   if (!touchInPlay()) return;
   const p = touchPos(e);
   // Slide left/right to ANGLE the paddle — the mobile version of the mouse-wheel
@@ -1860,6 +1868,9 @@ canvas.addEventListener("touchmove", e => {
     player.tilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, touchBaseTilt + eff * TILT_TOUCH_K));
   }
   e.preventDefault();
+}, { passive: false });
+canvas.addEventListener("touchend", e => {
+  if (state === "store" && storeTapX != null) { if (!storeMoved) handleTap(storeTapX, storeTapY); touchScrollY = null; storeTapX = null; }
 }, { passive: false });
 
 function restart() {
@@ -3781,7 +3792,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.20", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.21", W - 16, H - 16);
   ctx.restore();
 }
 
@@ -4757,6 +4768,7 @@ const SHOP_ITEMS = [
   { key: "hustle",   emoji: "👟", desc: "Faster you, slow CPU",   cost: 250 },
 ];
 let shopSel = 0, storeTab = "powerups", buyFx = null;   // buyFx = { key, start } for the +1 pop
+let storeScroll = 0, storeScrollMax = 0, touchScrollY = null, storeTapX = null, storeTapY = 0, storeMoved = false;   // store list scroll + tap-vs-drag
 function invCount(key) { return save.inventory[key] || 0; }
 function buyPowerup(key) {   // consumable — adds ONE, buy as many as you like
   const it = SHOP_ITEMS.find(x => x.key === key); if (!it) return;
@@ -4812,14 +4824,23 @@ function drawStore() {
     ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = on ? ui.btnTextOn : ui.btnText; ctx.font = "bold 14px " + ui.font;
     ctx.fillText(label, tx + tabW / 2, tabY + tabH / 2);
     ctx.restore();
-    hotspots.push({ x: tx, y: tabY, w: tabW, h: tabH, action: () => { storeTab = key; shopSel = 0; } });
+    hotspots.push({ x: tx, y: tabY, w: tabW, h: tabH, action: () => { storeTab = key; shopSel = 0; storeScroll = 0; } });
   });
   const gy = tabY + tabH + 16, gridW = pw - 48, cols = 2, gapX = 16, gapY = 10;
   const cellW = (gridW - gapX) / cols, cellH = 76, gx = W / 2 - gridW / 2;
   const list = storeTab === "powerups" ? SHOP_ITEMS : PADDLES;
+  // Scrollable grid — the list (esp. paddles) can be taller than the panel.
+  const srows = Math.ceil(list.length / cols);
+  const viewTop = gy, viewBottom = p.py + ph - 58, viewH = viewBottom - viewTop;
+  const totalH = srows * (cellH + gapY) - gapY;
+  storeScrollMax = Math.max(0, totalH - viewH);
+  storeScroll = Math.max(0, Math.min(storeScroll, storeScrollMax));
+  ctx.save();
+  roundRectPath(gx - 8, viewTop - 4, gridW + 16, viewH + 8, 10); ctx.clip();
   list.forEach((it, i) => {
     const col = i % cols, row = (i - col) / cols;
-    const x = gx + col * (cellW + gapX), y = gy + row * (cellH + gapY);
+    const x = gx + col * (cellW + gapX), y = gy + row * (cellH + gapY) - storeScroll;
+    if (y + cellH < viewTop - 4 || y > viewBottom + 4) return;   // scrolled out of view
     const sel = shopSel === i;
     const isPow = storeTab === "powerups";
     const owned = !isPow && paddleUnlocked(it);
@@ -4860,6 +4881,14 @@ function drawStore() {
     ctx.restore();
     hotspots.push({ x, y, w: cellW, h: cellH, action: () => { shopSel = i; if (isPow) buyPowerup(it.key); else buyPaddleShop(it.id); } });
   });
+  ctx.restore();
+  if (storeScrollMax > 0) {   // scrollbar
+    const trackX = gx + gridW + 4, thumbH = Math.max(28, viewH * viewH / totalH);
+    ctx.save();
+    ctx.fillStyle = "rgba(120,180,200,0.15)"; roundRectPath(trackX, viewTop, 4, viewH, 2); ctx.fill();
+    ctx.fillStyle = "rgba(124,243,255,0.6)"; roundRectPath(trackX, viewTop + (viewH - thumbH) * (storeScroll / storeScrollMax), 4, thumbH, 2); ctx.fill();
+    ctx.restore();
+  }
   const backW = 180, backH = 44;
   btnUI("‹ BACK", W / 2 - backW / 2, p.py + ph - 50, backW, backH, false, () => { homeIndex = 2; state = "home"; }, ui);
 }
@@ -4888,8 +4917,11 @@ function drawLocker() {
     const pdImg2 = paddleSkinImg(pd.img);
     if (pdImg2) { const dh = 32, dw = dh * pdImg2.naturalWidth / pdImg2.naturalHeight; ctx.drawImage(pdImg2, x + sw / 2 - dw / 2, y + 8, dw, dh); }
     else { ctx.fillStyle = swatch; ctx.fillRect(x + sw / 2 - 6, y + 8, 12, 30); }
-    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = equipped ? CY : ui.btnText; ctx.font = "bold 11px " + ui.font;
-    ctx.fillText(equipped ? "EQUIPPED" : pd.name, x + sw / 2, y + 54);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = equipped ? CY : ui.btnText;
+    const plabel = equipped ? "EQUIPPED" : pd.name;
+    let pfs = 11; ctx.font = "bold " + pfs + "px " + ui.font;
+    while (ctx.measureText(plabel).width > sw - 8 && pfs > 7) { pfs--; ctx.font = "bold " + pfs + "px " + ui.font; }   // shrink to fit the cell
+    ctx.fillText(plabel, x + sw / 2, y + 54);
     ctx.restore();
     hotspots.push({ x, y, w: sw, h: sh, action: () => { save.paddle = pd.id; persist(); uiClick(); } });
   });
