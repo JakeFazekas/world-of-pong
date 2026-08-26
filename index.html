@@ -508,6 +508,22 @@ loadPaddleSkin("baguette",  "paddle-art/baguette.png");
 loadPaddleSkin("corn",      "paddle-art/corn.png");
 loadPaddleSkin("hotdog",    "paddle-art/hotdog.png");
 loadPaddleSkin("chocolate", "paddle-art/chocolate.png");
+// EPIC
+loadPaddleSkin("lightsaber",  "paddle-art/lightsaber.png");
+loadPaddleSkin("katana",      "paddle-art/katana.png");
+loadPaddleSkin("wizardstaff", "paddle-art/wizardstaff.png");
+loadPaddleSkin("warhammer",   "paddle-art/warhammer.png");
+loadPaddleSkin("shield",      "paddle-art/shield.png");
+// NEON
+loadPaddleSkin("glowstick",   "paddle-art/glowstick.png");
+loadPaddleSkin("cactus",      "paddle-art/cactus.png");
+loadPaddleSkin("lavalamp",    "paddle-art/lavalamp.png");
+loadPaddleSkin("neonguitar",  "paddle-art/neonguitar.png");
+// ELEMENTAL
+loadPaddleSkin("icicle",      "paddle-art/icicle.png");
+loadPaddleSkin("lightning",   "paddle-art/lightning.png");
+loadPaddleSkin("flame",       "paddle-art/flame.png");
+loadPaddleSkin("tornado",     "paddle-art/tornado.png");
 
 // Powerup icons — image icons drawn on the drifting powerup (drawPowerup) so the
 // effect reads at a glance without text (Jake: burger = beefy = bigger paddle).
@@ -564,6 +580,22 @@ const PADDLES = [
   { id: "hotdog",    name: "HOT DOG",   fill: "theme", glow: "theme", cost: 2200, set: "food", img: "hotdog" },
   { id: "corn",      name: "CORN",      fill: "theme", glow: "theme", cost: 2600, set: "food", img: "corn" },
   { id: "chocolate", name: "CHOCOLATE", fill: "theme", glow: "theme", cost: 3000, set: "food", img: "chocolate" },
+  // EPIC — costs sit in one band (3200–4000); the SET carries the level floor.
+  { id: "warhammer",  name: "WARHAMMER",  fill: "theme", glow: "theme", cost: 3200, set: "epic", img: "warhammer" },
+  { id: "katana",     name: "KATANA",     fill: "theme", glow: "theme", cost: 3400, set: "epic", img: "katana" },
+  { id: "wizardstaff",name: "STAFF",      fill: "theme", glow: "theme", cost: 3600, set: "epic", img: "wizardstaff" },
+  { id: "shield",     name: "SHIELD",     fill: "theme", glow: "theme", cost: 3800, set: "epic", img: "shield" },
+  { id: "lightsaber", name: "LIGHTSABER", fill: "theme", glow: "theme", cost: 4000, set: "epic", img: "lightsaber" },
+  // NEON
+  { id: "glowstick",  name: "GLOW STICK", fill: "theme", glow: "theme", cost: 3200, set: "neon", img: "glowstick" },
+  { id: "cactus",     name: "CACTUS",     fill: "theme", glow: "theme", cost: 3400, set: "neon", img: "cactus" },
+  { id: "lavalamp",   name: "LAVA LAMP",  fill: "theme", glow: "theme", cost: 3600, set: "neon", img: "lavalamp" },
+  { id: "neonguitar", name: "GUITAR",     fill: "theme", glow: "theme", cost: 3800, set: "neon", img: "neonguitar" },
+  // ELEMENTAL
+  { id: "icicle",     name: "ICICLE",     fill: "theme", glow: "theme", cost: 3600, set: "elemental", img: "icicle" },
+  { id: "tornado",    name: "TORNADO",    fill: "theme", glow: "theme", cost: 3800, set: "elemental", img: "tornado" },
+  { id: "lightning",  name: "LIGHTNING",  fill: "theme", glow: "theme", cost: 4000, set: "elemental", img: "lightning" },
+  { id: "flame",      name: "FLAME",      fill: "theme", glow: "theme", cost: 4200, set: "elemental", img: "flame" },
 ];
 
 // --- PADDLE SETS (collections) ---
@@ -577,7 +609,7 @@ const PADDLES = [
 const PADDLE_SETS = [
   { id: "classic",   name: "CLASSIC",   icon: "🎮", tint: "#dfe6ee", blurb: "Where everyone starts",  reqLevel: 1,  bonus: 200  },
   { id: "food",      name: "FOOD",      icon: "🍔", tint: "#ffcf40", blurb: "Snack-powered smashing", reqLevel: 8,  bonus: 600  },
-  { id: "epic",      name: "EPIC",      icon: "⚔️", tint: "#ff3df0", blurb: "Legendary weapons",      reqLevel: 10, bonus: 900  },
+  { id: "epic",      name: "EPIC",      icon: "⚔️", tint: "#ff3df0", blurb: "Legendary arms",         reqLevel: 10, bonus: 900  },
   { id: "neon",      name: "NEON",      icon: "💡", tint: "#7cf3ff", blurb: "Pure glow",              reqLevel: 12, bonus: 900  },
   { id: "elemental", name: "ELEMENTAL", icon: "❄️", tint: "#5ad1ff", blurb: "Forces of nature",       reqLevel: 14, bonus: 1200 },
 ];
@@ -3883,7 +3915,7 @@ function drawHome() {
   ctx.textAlign = "right";
   ctx.fillStyle = "rgba(120,160,180,0.5)";
   ctx.font = Math.round(H * 0.024) + "px 'Courier New', monospace";
-  ctx.fillText("EARLY BUILD 0.1.23", W - 16, H - 16);
+  ctx.fillText("EARLY BUILD 0.1.24", W - 16, H - 16);
   ctx.restore();
 }
 
